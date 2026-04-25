@@ -1,63 +1,75 @@
-import Image from "next/image";
+"use client";
+
+import { useState } from "react";
+import { StatementForm } from "@/components/statement-form";
+import { StatementPreview } from "@/components/statement-preview";
+import { getMockStatementData } from "@/lib/mock-statement-service";
+import { downloadStatementPdf } from "@/lib/pdf-generator";
+import type { StatementData, StatementInput } from "@/types/statement";
+
+const ACTIVITY_PERIOD = { startDate: "2025-02-01", endDate: "2025-02-28" };
+const NO_ACTIVITY_PERIOD = { startDate: "2022-06-01", endDate: "2022-06-30" };
+
+const DEFAULT_INPUT: StatementInput = {
+  network: "Moonbeam",
+  walletAddress: "0x49A5...8aC2",
+  tokenSymbol: "GLMR",
+  ...ACTIVITY_PERIOD,
+};
 
 export default function Home() {
+  const [input, setInput] = useState<StatementInput>(DEFAULT_INPUT);
+  const [scenario, setScenario] = useState<"activity" | "no-activity">("activity");
+  const [statement, setStatement] = useState<StatementData | null>(
+    getMockStatementData(DEFAULT_INPUT, "activity"),
+  );
+
+  function handleScenarioChange(nextScenario: "activity" | "no-activity") {
+    const period = nextScenario === "activity" ? ACTIVITY_PERIOD : NO_ACTIVITY_PERIOD;
+    setScenario(nextScenario);
+    setInput((prev) => ({ ...prev, ...period }));
+  }
+
+  function handleGeneratePreview() {
+    setStatement(getMockStatementData(input, scenario));
+  }
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+    <div className="min-h-screen bg-slate-100">
+      <main className="mx-auto w-full max-w-6xl px-4 py-8 md:px-8">
+        <header className="mb-8 rounded-2xl bg-slate-900 px-6 py-8 text-white shadow-lg">
+          <p className="text-xs uppercase tracking-[0.2em] text-slate-300">CryptoStatements.xyz</p>
+          <h1 className="mt-2 text-3xl font-bold md:text-4xl">Blockchain Account Statement Builder</h1>
+          <p className="mt-3 max-w-3xl text-sm text-slate-200 md:text-base">
+            Generate professional crypto account statement previews and export bank-statement-style PDFs
+            from Subscan-style data. This first version uses mock data only.
           </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
+        </header>
+
+        <div className="grid gap-6 lg:grid-cols-[1fr_1.4fr]">
+          <div className="space-y-4">
+            <StatementForm
+              value={input}
+              scenario={scenario}
+              onChange={setInput}
+              onScenarioChange={handleScenarioChange}
+              onGenerate={handleGeneratePreview}
             />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+
+            <button
+              type="button"
+              className="w-full rounded-lg bg-emerald-600 px-5 py-3 text-sm font-medium text-white hover:bg-emerald-500"
+              onClick={() => {
+                if (statement) {
+                  downloadStatementPdf(statement);
+                }
+              }}
+            >
+              Download Statement PDF
+            </button>
+          </div>
+
+          <StatementPreview statement={statement} />
         </div>
       </main>
     </div>
