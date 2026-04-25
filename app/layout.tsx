@@ -15,6 +15,26 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "CryptoStatements.xyz",
   description: "Create official-looking PDF crypto account statements.",
+  metadataBase: new URL("https://cryptostatements.xyz"),
+  icons: {
+    icon: "/cryptostatements-logo.png",
+    shortcut: "/cryptostatements-logo.png",
+    apple: "/cryptostatements-logo.png",
+  },
+  openGraph: {
+    title: "CryptoStatements.xyz",
+    description: "Create official-looking PDF crypto account statements.",
+    url: "https://cryptostatements.xyz",
+    siteName: "CryptoStatements.xyz",
+    images: [{ url: "/cryptostatements-logo.png" }],
+    type: "website",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "CryptoStatements.xyz",
+    description: "Create official-looking PDF crypto account statements.",
+    images: ["/cryptostatements-logo.png"],
+  },
 };
 
 export default function RootLayout({

@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useState } from "react";
 import { StatementForm } from "@/components/statement-form";
 import { StatementPreview } from "@/components/statement-preview";
@@ -38,7 +39,16 @@ export default function Home() {
     <div className="min-h-screen bg-slate-100">
       <main className="mx-auto w-full max-w-6xl px-4 py-8 md:px-8">
         <header className="mb-8 rounded-2xl bg-slate-900 px-6 py-8 text-white shadow-lg">
-          <p className="text-xs uppercase tracking-[0.2em] text-slate-300">CryptoStatements.xyz</p>
+          <div className="inline-flex rounded-lg bg-black/30 p-2">
+            <Image
+              src="/cryptostatements-logo.png"
+              alt="CryptoStatements.xyz logo"
+              width={430}
+              height={80}
+              priority
+              className="h-auto w-[280px] md:w-[360px]"
+            />
+          </div>
           <h1 className="mt-2 text-3xl font-bold md:text-4xl">Blockchain Account Statement Builder</h1>
           <p className="mt-3 max-w-3xl text-sm text-slate-200 md:text-base">
             Generate professional crypto account statement previews and export bank-statement-style PDFs
