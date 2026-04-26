@@ -1,4 +1,9 @@
 import { toUnixSecondsForChain } from "@/lib/chain-timestamp";
+import {
+  ethGetBalanceGlmrAtEvmBlockFromRpc,
+  evmLargestBlockBeforeUnixSecond,
+  getMoonbeamPublicRpcUrl,
+} from "@/lib/moonbeam-evm-rpc";
 import type { StatementInput } from "@/types/statement";
 
 const NETWORK_TO_API_HOST: Record<string, string> = {
@@ -335,6 +340,29 @@ export async function evmBlockNumberAtUnix(
   return null;
 }
 
+/**
+ * Bookend block heights: on Moonbeam we resolve **archival** EVM blocks with public JSON-RPC
+ * (largest block whose time &lt; `target` second). Subscan `getblocknobytime` can be inconsistent;
+ * the Etherscan balance + blockno path often returns **current** GLMR, not history.
+ */
+export async function resolveEvmBlockForStatementBookend(
+  input: StatementInput,
+  apiKey: string,
+  unixSeconds: number,
+): Promise<number | null> {
+  if (input.network === "Moonbeam") {
+    try {
+      const b = await evmLargestBlockBeforeUnixSecond(getMoonbeamPublicRpcUrl(), unixSeconds);
+      if (b != null && b >= 0) {
+        return b;
+      }
+    } catch {
+      /* try Subscan */
+    }
+  }
+  return evmBlockNumberAtUnix(input.network, apiKey, unixSeconds);
+}
+
 const WEI_PER_GLMR = BigInt("1000000000000000000");
 
 function glmrFromEvmBalanceWeiString(raw: string) {
@@ -386,14 +414,25 @@ function evmBlockNumberToEtherscanTag(blockNumber: number) {
 }
 
 /**
- * On-chain **native (GLMR)** at an EVM block. Prefer `balancehistory&blockno` (historical, decimal block)
- * so old heights are correct; `balance&tag=0x..` is often limited to recent blocks and can misread.
+ * On-chain **native (GLMR)** at an EVM block. For Moonbeam, **eth_getBalance** on public RPC
+ * (archival) — Subscan Etherscan balance at block is unreliable and often returns **latest** GLMR.
  */
 export async function fetchEvmNativeGlmrAtEvmBlock(
   input: StatementInput,
   apiKey: string,
   evmBlockNumber: number,
 ) {
+  if (input.network === "Moonbeam") {
+    try {
+      return await ethGetBalanceGlmrAtEvmBlockFromRpc(
+        getMoonbeamPublicRpcUrl(),
+        input.walletAddress.trim().toLowerCase(),
+        evmBlockNumber,
+      );
+    } catch {
+      /* Subscan as last resort */
+    }
+  }
   const blockno = String(Math.max(0, Math.floor(evmBlockNumber)));
   const address = input.walletAddress.trim().toLowerCase();
   try {

@@ -1,7 +1,7 @@
 import { toUnixSecondsForChain } from "@/lib/chain-timestamp";
+import { getMoonbeamPublicRpcUrl } from "@/lib/moonbeam-evm-rpc";
 import { buildStatementSummary } from "@/lib/statement-calculations";
 import {
-  evmBlockNumberAtUnix,
   fetchBalanceHistory,
   fetchCurrentEvmBalanceWei,
   fetchEvmNativeGlmrAtEvmBlock,
@@ -11,6 +11,7 @@ import {
   fetchV2Extrinsics,
   fetchV2RewardSlashForStatementPeriod,
   fetchV2Transfers,
+  resolveEvmBlockForStatementBookend,
   resolveEvmBlockWindow,
   resolveSubstrateBlockWindow,
 } from "@/lib/subscan-client";
@@ -363,16 +364,20 @@ export async function getLiveStatementFromSubscan(
 
   const tsStart = startOfDayUnix(input.startDate);
   const tsClose = startOfDayUnix(dayAfterEnd);
-  const [evmBlockStart, evmBlockClose] = await Promise.all([
-    evmBlockNumberAtUnix(input.network, apiKey, tsStart),
-    evmBlockNumberAtUnix(input.network, apiKey, tsClose),
-  ]);
+  const evmBlockStart = await resolveEvmBlockForStatementBookend(input, apiKey, tsStart);
+  const evmBlockClose = await resolveEvmBlockForStatementBookend(input, apiKey, tsClose);
 
   let beginningBalance: number;
   let endingBalance: number;
   let bookendSource: "evm" | "subscan" | "subscan+current" = "subscan";
 
-  if (evmBlockStart != null && evmBlockClose != null) {
+  const evmBlocksDegenerate =
+    evmBlockStart != null &&
+    evmBlockClose != null &&
+    evmBlockStart === evmBlockClose &&
+    input.startDate < dayAfterEnd;
+
+  if (evmBlockStart != null && evmBlockClose != null && !evmBlocksDegenerate) {
     const [evmBegin, evmEnd] = await Promise.all([
       fetchEvmNativeGlmrAtEvmBlock(input, apiKey, evmBlockStart),
       fetchEvmNativeGlmrAtEvmBlock(input, apiKey, evmBlockClose),
@@ -416,7 +421,7 @@ export async function getLiveStatementFromSubscan(
         ? `EVM block window (txlist/tokentx): ${evmBlockWindow.from}–${evmBlockWindow.to} (getblocknobytime).`
         : "Could not resolve an EVM block range; Etherscan-style lists use unbounded paging.",
       bookendSource === "evm"
-        ? `Beginning/ending balances: on-chain GLMR (Etherscan-style balance at block) for EVM blocks ${evmBlockStart} (00:00 UTC ${input.startDate}) and ${evmBlockClose} (00:00 UTC ${dayAfterEnd} = end-of-period close). Subscan balance_history is still queried for context but bookends use chain state when EVM block resolution works.`
+        ? `Beginning/ending balances: Moonbeam public JSON-RPC (${getMoonbeamPublicRpcUrl()}) — largest EVM block with block_time < each bound (00:00 UTC ${input.startDate} and ${dayAfterEnd}), then eth_getBalance at EVM blocks ${evmBlockStart} and ${evmBlockClose}. (Subscan Etherscan balance-at-block can match current GLMR, so it is not used for bookends.)`
         : "Beginning/ending (fallback when EVM bookends fail): Subscan balance_history. Integer strings = wei; decimal strings = GLMR. For ended periods, current wallet balance is not used as the ending balance. Query window still includes a day before start and a day after end when requesting history.",
       sortedHistory.length
         ? `Balance snapshots returned from ${sortedHistory[0].date} to ${sortedHistory[sortedHistory.length - 1].date}.`
