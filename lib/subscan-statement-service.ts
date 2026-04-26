@@ -110,6 +110,13 @@ function parseSubscanHistoryBalanceGlmr(raw: string | undefined) {
   if (t === "") {
     return 0;
   }
+  if (t.startsWith("0x") || t.startsWith("0X")) {
+    try {
+      return weiBigIntToGlmr(BigInt(t));
+    } catch {
+      return 0;
+    }
+  }
   if (t.includes(".") || /[eE]/.test(t)) {
     const n = Number(t);
     return Number.isFinite(n) ? n : 0;
@@ -125,8 +132,10 @@ function parseSubscanHistoryBalanceGlmr(raw: string | undefined) {
 }
 
 /**
- * A single `balance_history` range call sometimes omits days or returns an empty `history` for
- * some Subscan/keys; one-day requests for the bookend YYYY-MM-DDs usually backfill the gaps.
+ * A range `balance_history` call often still returns a row for each day, so **all** bookend
+ * dates appear “present” and we used to **skip** one-day fetches — leaving wrong or parse-zero
+ * balances. We always re-fetch the four bookend instants in narrow `[d,d]` calls and let those
+ * results override the wide response for the same YYYY-MM-DD.
  */
 async function enrichBookendHistoryIfNeeded(
   input: StatementInput,
@@ -144,20 +153,17 @@ async function enrichBookendHistoryIfNeeded(
     ),
   );
   const by = new Map(history.map((r) => [r.date, r]));
-  const missing = critical.filter((d) => !by.has(d));
-  if (missing.length === 0) {
-    return history;
-  }
   const extra = await Promise.all(
-    missing.map((d) => fetchBalanceHistory(input, apiKey, { start: d, end: d })),
+    critical.map((d) => fetchBalanceHistory(input, apiKey, { start: d, end: d })),
   );
-  for (const rows of extra) {
-    for (const r of rows) {
-      const d = normalizeSubscanYmdDate(r.date);
+  for (let i = 0; i < critical.length; i += 1) {
+    const d = critical[i]!;
+    for (const r of extra[i] ?? []) {
+      const k = normalizeSubscanYmdDate(r.date);
+      if (k !== d) continue;
       if (r.balance == null || String(r.balance).trim() === "") continue;
-      if (!by.has(d) || parseSubscanHistoryBalanceGlmr(by.get(d)!.balance) < 1e-12) {
-        by.set(d, { date: d, balance: r.balance, block: r.block });
-      }
+      by.set(d, { date: d, balance: r.balance, block: r.block });
+      break;
     }
   }
   return [...by.values()].sort((a, b) => a.date.localeCompare(b.date));
@@ -518,6 +524,18 @@ export async function getLiveStatementFromSubscan(
     }
   }
 
+  if (
+    input.network === "Moonbeam" &&
+    periodEnded &&
+    Math.abs(netFromLines) > 1e-8 &&
+    Math.abs(beginningBalance) < 1e-12 &&
+    Math.abs(endingBalance) < 1e-12
+  ) {
+    bookendSource = "reconciled";
+    beginningBalance = 0;
+    endingBalance = netFromLines;
+  }
+
   const summary = buildStatementSummary(beginningBalance, detailLines);
   summary.endingBalance = endingBalance;
   summary.accountingCheckPassed =
@@ -548,8 +566,8 @@ export async function getLiveStatementFromSubscan(
         ? `EVM block window (txlist/tokentx): ${evmBlockWindow.from}–${evmBlockWindow.to} (getblocknobytime).`
         : "Could not resolve an EVM block range; Etherscan-style lists use unbounded paging.",
       bookendSource === "reconciled"
-        ? `Beginning/ending: Subscan daily rows matched the current total GLMR (stale/duplicate). We align to your line items; for a period that ends before today, ending = begin anchor + net GLMR from lines; for a through-date through today, ending = today’s total from Subscan and beginning = that minus net.`
-        : "Beginning/ending: Subscan /api/scan/account/balance_history (total GLMR per Subscan, including staked) — not EVM eth_getBalance. “Current end” for an in-progress through-date uses today’s history row or a [today, today] history fetch.",
+        ? `Beginning/ending: reconciled to line items — Subscan was stale, duplicate with current, or bookends were still zero after range + one-day fetches. When both stayed at zero, ending = net GLMR from the statement categories and beginning = 0.`
+        : "Beginning/ending: Subscan /api/scan/account/balance_history (wide range + one-day override for the four bookend dates). “Current end” for a through-date through today may use a [today, today] history fetch.",
       sortedHistory.length
         ? `Balance snapshots returned from ${sortedHistory[0].date} to ${sortedHistory[sortedHistory.length - 1].date}.`
         : "No balance history snapshots were returned for this wallet and period.",
