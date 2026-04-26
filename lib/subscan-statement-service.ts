@@ -9,6 +9,7 @@ import {
   fetchV2Extrinsics,
   fetchV2RewardSlash,
   fetchV2Transfers,
+  resolveStatementBlockWindow,
 } from "@/lib/subscan-client";
 import type { StatementData, StatementInput, StatementLine } from "@/types/statement";
 
@@ -59,16 +60,18 @@ export async function getLiveStatementFromSubscan(
     throw new Error("Live Moonbeam mode requires a valid 0x EVM wallet address (42 characters).");
   }
 
+  const blockWindow = await resolveStatementBlockWindow(input, apiKey);
+
   const [currentBalanceWei, balanceHistory, transfers, rewards, extrinsics, evmTxs, erc20Txs, nftTxs] =
     await Promise.all([
       fetchCurrentEvmBalanceWei(input, apiKey),
       fetchBalanceHistory(input, apiKey),
-      fetchV2Transfers(input, apiKey),
-      fetchV2RewardSlash(input, apiKey),
-      fetchV2Extrinsics(input, apiKey),
-      fetchEvmTxList(input, apiKey),
-      fetchEvmTokenTransfers(input, apiKey),
-      fetchEvmNftTransfers(input, apiKey),
+      fetchV2Transfers(input, apiKey, blockWindow),
+      fetchV2RewardSlash(input, apiKey, blockWindow),
+      fetchV2Extrinsics(input, apiKey, blockWindow),
+      fetchEvmTxList(input, apiKey, blockWindow),
+      fetchEvmTokenTransfers(input, apiKey, blockWindow),
+      fetchEvmNftTransfers(input, apiKey, blockWindow),
     ]);
 
   const wallet = input.walletAddress.toLowerCase();
@@ -270,7 +273,9 @@ export async function getLiveStatementFromSubscan(
     ),
     notes: [
       "Live data source: Subscan balance history + transfers + reward/slash + extrinsics + EVM activity.",
-      "Transfer/reward/extrinsic/EVM lists are fetched newest-first until before the statement start date (avoids missing a recent period when older than the first page of asc-ordered results).",
+      blockWindow
+        ? `On-chain block window for list APIs: ${blockWindow.from}–${blockWindow.to} (from statement dates via /api/scan/block).`
+        : "Could not resolve a block range from dates; Substrate/EVM lists use unbounded paging (slower, may be incomplete for very active accounts).",
       "Beginning/ending balances are taken from Subscan balance history snapshots for the selected dates.",
       sortedHistory.length
         ? `Balance snapshots returned from ${sortedHistory[0].date} to ${sortedHistory[sortedHistory.length - 1].date}.`

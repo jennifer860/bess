@@ -1,4 +1,3 @@
-import { toUnixSecondsForChain } from "@/lib/chain-timestamp";
 import type { StatementInput } from "@/types/statement";
 
 const NETWORK_TO_API_HOST: Record<string, string> = {
@@ -69,6 +68,11 @@ type SubscanResponse<T> = {
   data: T;
 };
 
+/** On-chain block span for Subscan `block_range: "from-to"` (v2) and EVM `startblock`/`endblock`. */
+export type StatementBlockWindow = { from: number; to: number };
+
+type SubscanBlockHeadData = { block_num?: number };
+
 function parseSubscanErrorDetail(result: unknown): string {
   if (typeof result === "string" && result.trim().length > 0) {
     return result;
@@ -84,10 +88,6 @@ function parseSubscanErrorDetail(result: unknown): string {
 
 function getApiHost(network: string) {
   return NETWORK_TO_API_HOST[network] ?? `${network.toLowerCase()}.api.subscan.io`;
-}
-
-function statementStartUnixFromInput(input: StatementInput) {
-  return Math.floor(new Date(`${input.startDate}T00:00:00Z`).getTime() / 1000);
 }
 
 /** Subscan Etherscan API often returns `"result": null` for empty `txlist` / `tokentx` / `tokennfttx` lists. */
@@ -216,6 +216,44 @@ async function callSubscanPost<T>(
   });
 }
 
+/**
+ * Map statement dates to a parachain/EVM block range via `/api/scan/block` (nearest to each timestamp).
+ * Used to scope v2 and EVM list APIs so a chosen month (e.g. Feb 2025) is not missed when the API
+ * ignores `order: desc` or the account has more history than page caps.
+ */
+export async function resolveStatementBlockWindow(
+  input: StatementInput,
+  apiKey: string,
+): Promise<StatementBlockWindow | null> {
+  const startT = Math.floor(new Date(`${input.startDate}T00:00:00Z`).getTime() / 1000);
+  const endT = Math.floor(new Date(`${input.endDate}T23:59:59Z`).getTime() / 1000);
+  const [a, b] = await Promise.all([
+    fetchBlockNumNearestToTimestamp(input.network, apiKey, startT),
+    fetchBlockNumNearestToTimestamp(input.network, apiKey, endT),
+  ]);
+  if (a == null || b == null) return null;
+  return { from: Math.min(a, b), to: Math.max(a, b) };
+}
+
+async function fetchBlockNumNearestToTimestamp(
+  network: string,
+  apiKey: string,
+  unixSeconds: number,
+): Promise<number | null> {
+  try {
+    const data = await callSubscanPost<SubscanBlockHeadData | null>(network, apiKey, "/api/scan/block", {
+      block_timestamp: unixSeconds,
+      only_head: true,
+    });
+    if (!data || typeof data !== "object" || data.block_num == null) {
+      return null;
+    }
+    return Number(data.block_num);
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchCurrentEvmBalanceWei(input: StatementInput, apiKey: string) {
   const result = await callEtherscanLike<string>(input.network, apiKey, {
     module: "account",
@@ -227,11 +265,16 @@ export async function fetchCurrentEvmBalanceWei(input: StatementInput, apiKey: s
   return Number(result);
 }
 
-export async function fetchEvmTxList(input: StatementInput, apiKey: string) {
+export async function fetchEvmTxList(
+  input: StatementInput,
+  apiKey: string,
+  blockWindow: StatementBlockWindow | null = null,
+) {
   const PAGE_SIZE = 100;
   const MAX_PAGES = 100;
-  const startUnix = statementStartUnixFromInput(input);
   const all: EvmTx[] = [];
+  const startblock = blockWindow ? String(blockWindow.from) : "0";
+  const endblock = blockWindow ? String(blockWindow.to) : "99999999";
 
   for (let page = 1; page <= MAX_PAGES; page += 1) {
     const batch = etherscanListResult(
@@ -239,19 +282,15 @@ export async function fetchEvmTxList(input: StatementInput, apiKey: string) {
         module: "account",
         action: "txlist",
         address: input.walletAddress,
-        startblock: "0",
-        endblock: "99999999",
+        startblock,
+        endblock,
         page: String(page),
         offset: String(PAGE_SIZE),
-        sort: "desc",
+        sort: blockWindow ? "asc" : "desc",
       }),
     );
 
     if (!batch.length) {
-      break;
-    }
-    const maxOnPage = Math.max(0, ...batch.map((t) => toUnixSecondsForChain(t.timeStamp)));
-    if (maxOnPage < startUnix) {
       break;
     }
     all.push(...batch);
@@ -282,13 +321,43 @@ export async function fetchBalanceHistory(input: StatementInput, apiKey: string)
 }
 
 const V2_ROW = 100;
-/** Upper bound; real stop is "page entirely before statement start" (see desc pagination). */
-const V2_MAX_PAGES = 100;
+const V2_MAX_PAGES_DESC = 100;
+const V2_MAX_PAGES_IN_RANGE = 500;
 
-/**
- * Subscan v2 lists default to oldest-first, so only the first ~5k events load — a recent range
- * (e.g. Feb 2025) is missed. Newest-first + stop when a page is entirely before `startDate`.
- */
+async function fetchV2PagedInBlockRange<T extends { block_timestamp: number }>(
+  input: StatementInput,
+  apiKey: string,
+  path: string,
+  listField: string,
+  range: StatementBlockWindow,
+  extraBody: Record<string, unknown> = {},
+): Promise<T[]> {
+  const param = `${range.from}-${range.to}`;
+  const all: T[] = [];
+  for (let page = 0; page < V2_MAX_PAGES_IN_RANGE; page += 1) {
+    const raw = await callSubscanPost<Record<string, unknown> | null>(input.network, apiKey, path, {
+      address: input.walletAddress,
+      row: V2_ROW,
+      page,
+      order: "asc",
+      block_range: param,
+      ...extraBody,
+    });
+    const data = raw && typeof raw === "object" ? raw : {};
+    const list = data[listField];
+    const rows = Array.isArray(list) ? (list as T[]) : [];
+    if (!rows.length) {
+      break;
+    }
+    all.push(...rows);
+    if (rows.length < V2_ROW) {
+      break;
+    }
+  }
+  return all;
+}
+
+/** Fallback: newest-first; do not pre-stop on "max &lt; start" (Subscan may ignore `order: desc`). */
 async function fetchV2PagedNewestFirst<T extends { block_timestamp: number }>(
   input: StatementInput,
   apiKey: string,
@@ -296,10 +365,9 @@ async function fetchV2PagedNewestFirst<T extends { block_timestamp: number }>(
   listField: string,
   extraBody: Record<string, unknown> = {},
 ): Promise<T[]> {
-  const startUnix = statementStartUnixFromInput(input);
   const all: T[] = [];
 
-  for (let page = 0; page < V2_MAX_PAGES; page += 1) {
+  for (let page = 0; page < V2_MAX_PAGES_DESC; page += 1) {
     const raw = await callSubscanPost<Record<string, unknown> | null>(input.network, apiKey, path, {
       address: input.walletAddress,
       row: V2_ROW,
@@ -313,11 +381,6 @@ async function fetchV2PagedNewestFirst<T extends { block_timestamp: number }>(
     if (!rows.length) {
       break;
     }
-
-    const maxOnPage = Math.max(0, ...rows.map((r) => toUnixSecondsForChain(r.block_timestamp)));
-    if (maxOnPage < startUnix) {
-      break;
-    }
     all.push(...rows);
     if (rows.length < V2_ROW) {
       break;
@@ -327,31 +390,62 @@ async function fetchV2PagedNewestFirst<T extends { block_timestamp: number }>(
   return all;
 }
 
-export async function fetchV2Transfers(input: StatementInput, apiKey: string) {
+export async function fetchV2Transfers(
+  input: StatementInput,
+  apiKey: string,
+  blockWindow: StatementBlockWindow | null = null,
+) {
+  if (blockWindow) {
+    return fetchV2PagedInBlockRange<V2Transfer>(input, apiKey, "/api/v2/scan/transfers", "transfers", blockWindow, {
+      include_total: false,
+    });
+  }
   return fetchV2PagedNewestFirst<V2Transfer>(input, apiKey, "/api/v2/scan/transfers", "transfers", {
     include_total: false,
   });
 }
 
-export async function fetchV2Extrinsics(input: StatementInput, apiKey: string) {
+export async function fetchV2Extrinsics(
+  input: StatementInput,
+  apiKey: string,
+  blockWindow: StatementBlockWindow | null = null,
+) {
+  if (blockWindow) {
+    return fetchV2PagedInBlockRange<V2Extrinsic>(input, apiKey, "/api/v2/scan/extrinsics", "extrinsics", blockWindow);
+  }
   return fetchV2PagedNewestFirst<V2Extrinsic>(input, apiKey, "/api/v2/scan/extrinsics", "extrinsics");
 }
 
-export async function fetchV2RewardSlash(input: StatementInput, apiKey: string) {
-  return fetchV2PagedNewestFirst<V2RewardSlash>(
-    input,
-    apiKey,
-    "/api/v2/scan/account/reward_slash",
-    "list",
-    { category: "Reward" },
-  );
+export async function fetchV2RewardSlash(
+  input: StatementInput,
+  apiKey: string,
+  blockWindow: StatementBlockWindow | null = null,
+) {
+  if (blockWindow) {
+    return fetchV2PagedInBlockRange<V2RewardSlash>(
+      input,
+      apiKey,
+      "/api/v2/scan/account/reward_slash",
+      "list",
+      blockWindow,
+      { category: "Reward" },
+    );
+  }
+  return fetchV2PagedNewestFirst<V2RewardSlash>(input, apiKey, "/api/v2/scan/account/reward_slash", "list", {
+    category: "Reward",
+  });
 }
 
-export async function fetchEvmTokenTransfers(input: StatementInput, apiKey: string) {
+export async function fetchEvmTokenTransfers(
+  input: StatementInput,
+  apiKey: string,
+  blockWindow: StatementBlockWindow | null = null,
+) {
   const PAGE_SIZE = 100;
   const MAX_PAGES = 100;
-  const startUnix = statementStartUnixFromInput(input);
   const all: EvmTokenTransfer[] = [];
+  const startblock = blockWindow ? String(blockWindow.from) : "0";
+  const endblock = blockWindow ? String(blockWindow.to) : "99999999";
 
   for (let page = 1; page <= MAX_PAGES; page += 1) {
     const batch = etherscanListResult(
@@ -359,19 +453,15 @@ export async function fetchEvmTokenTransfers(input: StatementInput, apiKey: stri
         module: "account",
         action: "tokentx",
         address: input.walletAddress,
-        startblock: "0",
-        endblock: "99999999",
+        startblock,
+        endblock,
         page: String(page),
         offset: String(PAGE_SIZE),
-        sort: "desc",
+        sort: blockWindow ? "asc" : "desc",
       }),
     );
 
     if (!batch.length) {
-      break;
-    }
-    const maxOnPage = Math.max(0, ...batch.map((t) => toUnixSecondsForChain(t.timeStamp)));
-    if (maxOnPage < startUnix) {
       break;
     }
     all.push(...batch);
@@ -383,11 +473,16 @@ export async function fetchEvmTokenTransfers(input: StatementInput, apiKey: stri
   return all;
 }
 
-export async function fetchEvmNftTransfers(input: StatementInput, apiKey: string) {
+export async function fetchEvmNftTransfers(
+  input: StatementInput,
+  apiKey: string,
+  blockWindow: StatementBlockWindow | null = null,
+) {
   const PAGE_SIZE = 100;
   const MAX_PAGES = 100;
-  const startUnix = statementStartUnixFromInput(input);
   const all: EvmTokenTransfer[] = [];
+  const startblock = blockWindow ? String(blockWindow.from) : "0";
+  const endblock = blockWindow ? String(blockWindow.to) : "99999999";
 
   for (let page = 1; page <= MAX_PAGES; page += 1) {
     const batch = etherscanListResult(
@@ -395,19 +490,15 @@ export async function fetchEvmNftTransfers(input: StatementInput, apiKey: string
         module: "account",
         action: "tokennfttx",
         address: input.walletAddress,
-        startblock: "0",
-        endblock: "99999999",
+        startblock,
+        endblock,
         page: String(page),
         offset: String(PAGE_SIZE),
-        sort: "desc",
+        sort: blockWindow ? "asc" : "desc",
       }),
     );
 
     if (!batch.length) {
-      break;
-    }
-    const maxOnPage = Math.max(0, ...batch.map((t) => toUnixSecondsForChain(t.timeStamp)));
-    if (maxOnPage < startUnix) {
       break;
     }
     all.push(...batch);
