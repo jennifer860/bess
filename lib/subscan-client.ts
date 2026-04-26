@@ -85,38 +85,87 @@ function getApiHost(network: string) {
   return NETWORK_TO_API_HOST[network] ?? `${network.toLowerCase()}.api.subscan.io`;
 }
 
+/** Space between each Subscan HTTP call (one global queue) to stay under key limits. */
+const SUBSCAN_MIN_GAP_MS = 450;
+/** Exponential backoff base when Subscan returns HTTP 429 (code 20008). */
+const RATE_LIMIT_BASE_MS = 1_500;
+const RATE_LIMIT_MAX_RETRIES = 6;
+
+let subscanRequestTail: Promise<unknown> = Promise.resolve();
+
+function isRateLimitResponse(status: number, body: string) {
+  if (status === 429) return true;
+  if (body.includes("20008") && body.toLowerCase().includes("rate")) return true;
+  return false;
+}
+
+/**
+ * One-at-a-time Subscan traffic with a gap between calls and 429 retry/backoff.
+ * Avoids bursty `Promise.all` that triggers Subscan "code 20008" limits.
+ */
+function runSubscanRequest<T>(work: () => Promise<T>): Promise<T> {
+  const next = subscanRequestTail.then(async () => {
+    await new Promise((resolve) => setTimeout(resolve, SUBSCAN_MIN_GAP_MS));
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await work();
+      } catch (error) {
+        const is429 =
+          error instanceof Error &&
+          (error.message.includes("(429)") || /20008|rate limit/i.test(error.message));
+        if (attempt < RATE_LIMIT_MAX_RETRIES && is429) {
+          const backoff = Math.min(30_000, RATE_LIMIT_BASE_MS * 2 ** attempt);
+          await new Promise((resolve) => setTimeout(resolve, backoff));
+          continue;
+        }
+        throw error;
+      }
+    }
+  });
+  subscanRequestTail = next.then(
+    () => undefined,
+    () => undefined,
+  );
+  return next;
+}
+
 async function callEtherscanLike<T>(
   network: string,
   apiKey: string,
   params: Record<string, string>,
 ): Promise<T> {
-  const endpoint = new URL(`https://${getApiHost(network)}/api/scan/evm/etherscan`);
-  for (const [key, value] of Object.entries(params)) {
-    endpoint.searchParams.set(key, value);
-  }
+  return runSubscanRequest(async () => {
+    const endpoint = new URL(`https://${getApiHost(network)}/api/scan/evm/etherscan`);
+    for (const [key, value] of Object.entries(params)) {
+      endpoint.searchParams.set(key, value);
+    }
 
-  const response = await fetch(endpoint.toString(), {
-    method: "GET",
-    headers: { "x-api-key": apiKey },
-    cache: "no-store",
+    const response = await fetch(endpoint.toString(), {
+      method: "GET",
+      headers: { "x-api-key": apiKey },
+      cache: "no-store",
+    });
+
+    const text = await response.text();
+    if (!response.ok) {
+      if (isRateLimitResponse(response.status, text)) {
+        throw new Error(`Subscan request failed (429): ${text}`);
+      }
+      throw new Error(`Subscan request failed (${response.status}): ${text}`);
+    }
+
+    const payload = JSON.parse(text) as EtherscanLikeResponse<T>;
+    if (payload.status === "1") {
+      return payload.result;
+    }
+
+    if (payload.message === "No transactions found") {
+      return payload.result;
+    }
+
+    const detail = parseSubscanErrorDetail(payload.result);
+    throw new Error(`Subscan response error: ${payload.message}. Detail: ${detail}`);
   });
-
-  if (!response.ok) {
-    const message = await response.text();
-    throw new Error(`Subscan request failed (${response.status}): ${message}`);
-  }
-
-  const payload = (await response.json()) as EtherscanLikeResponse<T>;
-  if (payload.status === "1") {
-    return payload.result;
-  }
-
-  if (payload.message === "No transactions found") {
-    return payload.result;
-  }
-
-  const detail = parseSubscanErrorDetail(payload.result);
-  throw new Error(`Subscan response error: ${payload.message}. Detail: ${detail}`);
 }
 
 async function callSubscanPost<T>(
@@ -125,28 +174,36 @@ async function callSubscanPost<T>(
   path: string,
   body: Record<string, unknown>,
 ): Promise<T> {
-  const endpoint = `https://${getApiHost(network)}${path}`;
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-api-key": apiKey,
-    },
-    cache: "no-store",
-    body: JSON.stringify(body),
+  return runSubscanRequest(async () => {
+    const endpoint = `https://${getApiHost(network)}${path}`;
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": apiKey,
+      },
+      cache: "no-store",
+      body: JSON.stringify(body),
+    });
+
+    const text = await response.text();
+    if (!response.ok) {
+      if (isRateLimitResponse(response.status, text)) {
+        throw new Error(`Subscan request failed (429): ${text}`);
+      }
+      throw new Error(`Subscan request failed (${response.status}): ${text}`);
+    }
+
+    const payload = JSON.parse(text) as SubscanResponse<T>;
+    if (payload.code !== 0) {
+      if (payload.code === 20008 || /rate limit/i.test(payload.message)) {
+        throw new Error(`Subscan request failed (429): ${text}`);
+      }
+      throw new Error(`Subscan response error: ${payload.message}`);
+    }
+
+    return payload.data;
   });
-
-  if (!response.ok) {
-    const message = await response.text();
-    throw new Error(`Subscan request failed (${response.status}): ${message}`);
-  }
-
-  const payload = (await response.json()) as SubscanResponse<T>;
-  if (payload.code !== 0) {
-    throw new Error(`Subscan response error: ${payload.message}`);
-  }
-
-  return payload.data;
 }
 
 export async function fetchCurrentEvmBalanceWei(input: StatementInput, apiKey: string) {
