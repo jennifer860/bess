@@ -19,10 +19,53 @@ type EvmTx = {
   isError?: string;
 };
 
+type EvmTokenTransfer = {
+  timeStamp: string;
+  from: string;
+  to: string;
+  value: string;
+  tokenDecimal: string;
+};
+
+type BalanceHistoryItem = {
+  date: string;
+  balance: string;
+  block?: number;
+};
+
+type V2Transfer = {
+  block_timestamp: number;
+  from: string;
+  to: string;
+  amount_v2?: string;
+  amount?: string;
+  success?: boolean;
+};
+
+type V2Extrinsic = {
+  block_timestamp: number;
+  call_module?: string;
+  fee_used?: string;
+  fee?: string;
+  success?: boolean;
+};
+
+type V2RewardSlash = {
+  block_timestamp: number;
+  amount: string;
+  category?: "Reward" | "Slash";
+};
+
 type EtherscanLikeResponse<T> = {
   status: string;
   message: string;
   result: T;
+};
+
+type SubscanResponse<T> = {
+  code: number;
+  message: string;
+  data: T;
 };
 
 function parseSubscanErrorDetail(result: unknown): string {
@@ -76,6 +119,36 @@ async function callEtherscanLike<T>(
   throw new Error(`Subscan response error: ${payload.message}. Detail: ${detail}`);
 }
 
+async function callSubscanPost<T>(
+  network: string,
+  apiKey: string,
+  path: string,
+  body: Record<string, unknown>,
+): Promise<T> {
+  const endpoint = `https://${getApiHost(network)}${path}`;
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-api-key": apiKey,
+    },
+    cache: "no-store",
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(`Subscan request failed (${response.status}): ${message}`);
+  }
+
+  const payload = (await response.json()) as SubscanResponse<T>;
+  if (payload.code !== 0) {
+    throw new Error(`Subscan response error: ${payload.message}`);
+  }
+
+  return payload.data;
+}
+
 export async function fetchCurrentEvmBalanceWei(input: StatementInput, apiKey: string) {
   const result = await callEtherscanLike<string>(input.network, apiKey, {
     module: "account",
@@ -109,6 +182,133 @@ export async function fetchEvmTxList(input: StatementInput, apiKey: string) {
       break;
     }
 
+    all.push(...batch);
+    if (batch.length < PAGE_SIZE) {
+      break;
+    }
+  }
+
+  return all;
+}
+
+export async function fetchBalanceHistory(input: StatementInput, apiKey: string) {
+  const data = await callSubscanPost<{ history?: BalanceHistoryItem[] }>(
+    input.network,
+    apiKey,
+    "/api/scan/account/balance_history",
+    {
+      address: input.walletAddress,
+      start: input.startDate,
+      end: input.endDate,
+    },
+  );
+
+  return data.history ?? [];
+}
+
+async function fetchV2Paged<T>(
+  input: StatementInput,
+  apiKey: string,
+  path: string,
+  listField: string,
+  extraBody: Record<string, unknown> = {},
+): Promise<T[]> {
+  const ROW = 100;
+  const MAX_PAGES = 50;
+  const all: T[] = [];
+
+  for (let page = 0; page < MAX_PAGES; page += 1) {
+    const data = (await callSubscanPost<Record<string, unknown>>(input.network, apiKey, path, {
+      address: input.walletAddress,
+      row: ROW,
+      page,
+      order: "asc",
+      ...extraBody,
+    })) as Record<string, unknown>;
+
+    const rows = (data[listField] as T[] | undefined) ?? [];
+    if (!rows.length) {
+      break;
+    }
+
+    all.push(...rows);
+    if (rows.length < ROW) {
+      break;
+    }
+  }
+
+  return all;
+}
+
+export async function fetchV2Transfers(input: StatementInput, apiKey: string) {
+  return fetchV2Paged<V2Transfer>(input, apiKey, "/api/v2/scan/transfers", "transfers", {
+    include_total: false,
+  });
+}
+
+export async function fetchV2Extrinsics(input: StatementInput, apiKey: string) {
+  return fetchV2Paged<V2Extrinsic>(input, apiKey, "/api/v2/scan/extrinsics", "extrinsics");
+}
+
+export async function fetchV2RewardSlash(input: StatementInput, apiKey: string) {
+  return fetchV2Paged<V2RewardSlash>(
+    input,
+    apiKey,
+    "/api/v2/scan/account/reward_slash",
+    "list",
+    { category: "Reward" },
+  );
+}
+
+export async function fetchEvmTokenTransfers(input: StatementInput, apiKey: string) {
+  const PAGE_SIZE = 100;
+  const MAX_PAGES = 50;
+  const all: EvmTokenTransfer[] = [];
+
+  for (let page = 1; page <= MAX_PAGES; page += 1) {
+    const batch = await callEtherscanLike<EvmTokenTransfer[]>(input.network, apiKey, {
+      module: "account",
+      action: "tokentx",
+      address: input.walletAddress,
+      startblock: "0",
+      endblock: "99999999",
+      page: String(page),
+      offset: String(PAGE_SIZE),
+      sort: "asc",
+    });
+
+    if (!batch.length) {
+      break;
+    }
+    all.push(...batch);
+    if (batch.length < PAGE_SIZE) {
+      break;
+    }
+  }
+
+  return all;
+}
+
+export async function fetchEvmNftTransfers(input: StatementInput, apiKey: string) {
+  const PAGE_SIZE = 100;
+  const MAX_PAGES = 20;
+  const all: EvmTokenTransfer[] = [];
+
+  for (let page = 1; page <= MAX_PAGES; page += 1) {
+    const batch = await callEtherscanLike<EvmTokenTransfer[]>(input.network, apiKey, {
+      module: "account",
+      action: "tokennfttx",
+      address: input.walletAddress,
+      startblock: "0",
+      endblock: "99999999",
+      page: String(page),
+      offset: String(PAGE_SIZE),
+      sort: "asc",
+    });
+
+    if (!batch.length) {
+      break;
+    }
     all.push(...batch);
     if (batch.length < PAGE_SIZE) {
       break;

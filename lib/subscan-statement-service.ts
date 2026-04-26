@@ -1,5 +1,14 @@
 import { buildStatementSummary } from "@/lib/statement-calculations";
-import { fetchCurrentEvmBalanceWei, fetchEvmTxList } from "@/lib/subscan-client";
+import {
+  fetchBalanceHistory,
+  fetchCurrentEvmBalanceWei,
+  fetchEvmNftTransfers,
+  fetchEvmTokenTransfers,
+  fetchEvmTxList,
+  fetchV2Extrinsics,
+  fetchV2RewardSlash,
+  fetchV2Transfers,
+} from "@/lib/subscan-client";
 import type { StatementData, StatementInput, StatementLine } from "@/types/statement";
 
 const TOKEN_DECIMALS = 1e18;
@@ -20,6 +29,16 @@ function toIsoDate(unixSeconds: number) {
   return new Date(unixSeconds * 1000).toISOString().slice(0, 10);
 }
 
+function isInRange(unixSeconds: number, startUnix: number, endUnix: number) {
+  return unixSeconds >= startUnix && unixSeconds <= endUnix;
+}
+
+function parseTokenWithDecimals(rawValue: string, decimalsRaw: string) {
+  const value = Number(rawValue || "0");
+  const decimals = Number(decimalsRaw || "18");
+  return value / 10 ** decimals;
+}
+
 type DayAccumulator = {
   incoming: number;
   outgoing: number;
@@ -35,68 +54,57 @@ export async function getLiveStatementFromSubscan(
     throw new Error("Live mode currently supports Moonbeam first. Keep using mock mode for other networks.");
   }
 
-  // The Etherscan-like endpoints require an EVM-format address.
   if (!/^0x[a-fA-F0-9]{40}$/.test(input.walletAddress.trim())) {
     throw new Error("Live Moonbeam mode requires a valid 0x EVM wallet address (42 characters).");
   }
 
-  const [currentBalanceWei, transactions] = await Promise.all([
-    fetchCurrentEvmBalanceWei(input, apiKey),
-    fetchEvmTxList(input, apiKey),
-  ]);
+  const [currentBalanceWei, balanceHistory, transfers, rewards, extrinsics, evmTxs, erc20Txs, nftTxs] =
+    await Promise.all([
+      fetchCurrentEvmBalanceWei(input, apiKey),
+      fetchBalanceHistory(input, apiKey),
+      fetchV2Transfers(input, apiKey),
+      fetchV2RewardSlash(input, apiKey),
+      fetchV2Extrinsics(input, apiKey),
+      fetchEvmTxList(input, apiKey),
+      fetchEvmTokenTransfers(input, apiKey),
+      fetchEvmNftTransfers(input, apiKey),
+    ]);
 
   const wallet = input.walletAddress.toLowerCase();
   const startUnix = startOfDayUnix(input.startDate);
   const endUnix = endOfDayUnix(input.endDate);
 
   const dayBuckets = new Map<string, DayAccumulator>();
-  let periodNetWei = 0;
-  let afterPeriodNetWei = 0;
+  const detailLines: StatementLine[] = [];
 
-  for (const tx of transactions) {
-    const timestamp = Number(tx.timeStamp);
-    const from = tx.from.toLowerCase();
-    const to = tx.to.toLowerCase();
-    const value = Number(tx.value || "0");
-    const fee = from === wallet ? Number(tx.gasPrice || "0") * Number(tx.gasUsed || "0") : 0;
-
-    let txNet = 0;
-    if (to === wallet) {
-      txNet += value;
-    }
-    if (from === wallet) {
-      txNet -= value + fee;
-    }
-
-    if (timestamp > endUnix) {
-      afterPeriodNetWei += txNet;
-      continue;
-    }
-
-    if (timestamp < startUnix) {
-      continue;
-    }
-
-    periodNetWei += txNet;
+  for (const transfer of transfers) {
+    const timestamp = Number(transfer.block_timestamp);
+    if (!isInRange(timestamp, startUnix, endUnix)) continue;
+    if (transfer.success === false) continue;
 
     const date = toIsoDate(timestamp);
     const day = dayBuckets.get(date) ?? { incoming: 0, outgoing: 0, fees: 0, txCount: 0 };
-    if (to === wallet && value > 0) {
-      day.incoming += value;
-    }
-    if (from === wallet && value > 0) {
-      day.outgoing += value;
-    }
-    if (fee > 0) {
-      day.fees += fee;
-    }
+    const amount = Number(transfer.amount_v2 ?? transfer.amount ?? "0");
+    const from = transfer.from?.toLowerCase?.() ?? "";
+    const to = transfer.to?.toLowerCase?.() ?? "";
+
+    if (to === wallet && amount > 0) day.incoming += amount;
+    if (from === wallet && amount > 0) day.outgoing += amount;
     day.txCount += 1;
     dayBuckets.set(date, day);
   }
 
-  const endingBalanceWei = currentBalanceWei - afterPeriodNetWei;
-  const beginningBalanceWei = endingBalanceWei - periodNetWei;
-  const detailLines: StatementLine[] = [];
+  for (const ext of extrinsics) {
+    const timestamp = Number(ext.block_timestamp);
+    if (!isInRange(timestamp, startUnix, endUnix)) continue;
+    if (ext.success === false) continue;
+
+    const date = toIsoDate(timestamp);
+    const day = dayBuckets.get(date) ?? { incoming: 0, outgoing: 0, fees: 0, txCount: 0 };
+    day.fees += Number(ext.fee_used ?? ext.fee ?? "0");
+    day.txCount += 1;
+    dayBuckets.set(date, day);
+  }
 
   for (const [date, day] of [...dayBuckets.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
     if (day.incoming > 0) {
@@ -128,8 +136,116 @@ export async function getLiveStatementFromSubscan(
     }
   }
 
-  const summary = buildStatementSummary(weiToTokenAmount(beginningBalanceWei), detailLines);
-  summary.endingBalance = weiToTokenAmount(endingBalanceWei);
+  const rewardsInPeriod = rewards.filter((reward) =>
+    isInRange(Number(reward.block_timestamp), startUnix, endUnix),
+  );
+  const rewardByDate = new Map<string, number>();
+  for (const reward of rewardsInPeriod) {
+    const date = toIsoDate(Number(reward.block_timestamp));
+    rewardByDate.set(date, (rewardByDate.get(date) ?? 0) + Number(reward.amount || "0"));
+  }
+  for (const [date, amount] of [...rewardByDate.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+    detailLines.push({
+      date,
+      category: "Reward Income",
+      amount: weiToTokenAmount(amount),
+      direction: "in",
+      txCount: rewardsInPeriod.filter((row) => toIsoDate(Number(row.block_timestamp)) === date).length,
+    });
+  }
+
+  const addCountOnlyCategory = (
+    date: string,
+    category: StatementLine["category"],
+    count: number,
+    notes?: string,
+  ) => {
+    if (count <= 0) return;
+    detailLines.push({
+      date,
+      category,
+      amount: 0,
+      direction: "out",
+      txCount: count,
+      notes,
+    });
+  };
+
+  const evmTxByDate = new Map<string, number>();
+  for (const tx of evmTxs) {
+    const ts = Number(tx.timeStamp);
+    if (!isInRange(ts, startUnix, endUnix)) continue;
+    const date = toIsoDate(ts);
+    evmTxByDate.set(date, (evmTxByDate.get(date) ?? 0) + 1);
+  }
+  for (const [date, count] of evmTxByDate) addCountOnlyCategory(date, "EVM Transactions", count);
+
+  const erc20ByDate = new Map<string, { count: number; amount: number }>();
+  for (const tx of erc20Txs) {
+    const ts = Number(tx.timeStamp);
+    if (!isInRange(ts, startUnix, endUnix)) continue;
+    const date = toIsoDate(ts);
+    const row = erc20ByDate.get(date) ?? { count: 0, amount: 0 };
+    row.count += 1;
+    row.amount += parseTokenWithDecimals(tx.value, tx.tokenDecimal);
+    erc20ByDate.set(date, row);
+  }
+  for (const [date, row] of erc20ByDate) {
+    detailLines.push({
+      date,
+      category: "ERC-20 Transfers",
+      amount: row.amount,
+      direction: "in",
+      txCount: row.count,
+      notes: "Amount shown in source token units (not normalized to GLMR).",
+    });
+  }
+
+  const nftByDate = new Map<string, number>();
+  for (const tx of nftTxs) {
+    const ts = Number(tx.timeStamp);
+    if (!isInRange(ts, startUnix, endUnix)) continue;
+    const date = toIsoDate(ts);
+    nftByDate.set(date, (nftByDate.get(date) ?? 0) + 1);
+  }
+  for (const [date, count] of nftByDate) {
+    addCountOnlyCategory(date, "EVM Transactions", count, "Includes NFT transfer activity.");
+  }
+
+  const extrinsicByDate = new Map<string, { proxy: number; other: number }>();
+  for (const ext of extrinsics) {
+    const ts = Number(ext.block_timestamp);
+    if (!isInRange(ts, startUnix, endUnix)) continue;
+    if (ext.success === false) continue;
+    const date = toIsoDate(ts);
+    const row = extrinsicByDate.get(date) ?? { proxy: 0, other: 0 };
+    if ((ext.call_module ?? "").toLowerCase() === "proxy") row.proxy += 1;
+    else row.other += 1;
+    extrinsicByDate.set(date, row);
+  }
+  for (const [date, row] of extrinsicByDate) {
+    addCountOnlyCategory(date, "Proxy", row.proxy);
+    addCountOnlyCategory(date, "Extrinsics", row.other);
+  }
+
+  const transferCountByDate = new Map<string, number>();
+  for (const transfer of transfers) {
+    const ts = Number(transfer.block_timestamp);
+    if (!isInRange(ts, startUnix, endUnix)) continue;
+    const date = toIsoDate(ts);
+    transferCountByDate.set(date, (transferCountByDate.get(date) ?? 0) + 1);
+  }
+  for (const [date, count] of transferCountByDate) addCountOnlyCategory(date, "Transfers", count);
+
+  const sortedHistory = [...balanceHistory].sort((a, b) => a.date.localeCompare(b.date));
+  const startBalanceRaw = sortedHistory.find((row) => row.date >= input.startDate)?.balance ?? sortedHistory[0]?.balance;
+  const endBalanceRaw =
+    [...sortedHistory].reverse().find((row) => row.date <= input.endDate)?.balance ?? sortedHistory.at(-1)?.balance;
+  const beginningBalance = startBalanceRaw ? weiToTokenAmount(Number(startBalanceRaw)) : 0;
+  const endingBalance = endBalanceRaw ? weiToTokenAmount(Number(endBalanceRaw)) : weiToTokenAmount(currentBalanceWei);
+
+  const summary = buildStatementSummary(beginningBalance, detailLines);
+  summary.endingBalance = endingBalance;
   summary.accountingCheckPassed =
     Math.abs(
       summary.beginningBalance +
@@ -146,11 +262,16 @@ export async function getLiveStatementFromSubscan(
     accountLabel: "Primary Wallet",
     networkHost: `${input.network.toLowerCase()}.subscan.io`,
     summary,
-    detailLines,
+    detailLines: detailLines.sort((a, b) =>
+      a.date === b.date ? a.category.localeCompare(b.category) : a.date.localeCompare(b.date),
+    ),
     notes: [
-      "Live data source: Subscan EVM account endpoints.",
-      "Reward Income is temporarily set to 0 until dedicated reward endpoints are integrated.",
-      "Beginning/ending balances are estimated from current balance and transaction history in the selected range.",
+      "Live data source: Subscan balance history + transfers + reward/slash + extrinsics + EVM activity.",
+      "Beginning/ending balances are taken from Subscan balance history snapshots for the selected dates.",
+      sortedHistory.length
+        ? `Balance snapshots returned from ${sortedHistory[0].date} to ${sortedHistory[sortedHistory.length - 1].date}.`
+        : "No balance history snapshots were returned for this wallet and period.",
+      `Fetched records: transfers=${transfers.length}, rewards=${rewards.length}, extrinsics=${extrinsics.length}, evmTx=${evmTxs.length}, erc20=${erc20Txs.length}, nft=${nftTxs.length}.`,
     ],
   };
 }
