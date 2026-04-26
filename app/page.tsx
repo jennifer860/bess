@@ -85,23 +85,27 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-bess-mist">
       <main className="mx-auto w-full max-w-[100rem] px-4 py-8 md:px-8">
-        <header className="mb-8 rounded-2xl border border-bess-ink/10 bg-white px-6 py-8 text-bess-ink shadow-sm">
-          <div className="mx-auto flex max-w-3xl flex-col items-center text-center">
+        <header className="mb-6 rounded-2xl border border-bess-ink/10 bg-white px-4 py-4 text-bess-ink shadow-sm sm:px-5 sm:py-5">
+          <div className="flex w-full min-w-0 flex-col items-start text-left">
             <Image
               src="/cryptostatements-logo.png"
               alt="CryptoStatements — cryptostatements.xyz"
               width={1024}
               height={193}
               priority
-              className="h-auto w-full max-w-3xl object-contain"
+              className="h-auto w-auto max-w-[14rem] object-contain object-left sm:max-w-[16rem] md:max-w-[18rem]"
             />
-            <h1 className="mt-6 text-3xl font-bold md:text-4xl">
-              BESS - Blockchain Explorer Simple Statement
-            </h1>
-            <p className="mt-3 text-sm text-bess-ink/85 md:text-base">
-              Generate professional account statement previews and export bank-style PDFs from live
-              Subscan data for your wallet and selected period.
-            </p>
+            <div className="mt-2 min-w-0 max-w-full overflow-x-auto">
+              <h1 className="w-max whitespace-nowrap text-xl font-bold sm:text-2xl lg:text-3xl">
+                BESS - Blockchain Explorer Simple Statement
+              </h1>
+            </div>
+            <div className="mt-1 min-w-0 max-w-full overflow-x-auto">
+              <p className="w-max min-w-0 whitespace-nowrap text-xs text-bess-ink/85 sm:text-sm">
+                Generate professional account statement previews and export bank-style PDFs from live
+                Subscan data for your wallet and selected period.
+              </p>
+            </div>
           </div>
         </header>
 
