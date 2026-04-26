@@ -2,8 +2,11 @@ import { NextResponse } from "next/server";
 import { getLiveStatementFromSubscan } from "@/lib/subscan-statement-service";
 import type { StatementInput } from "@/types/statement";
 
-/** Subscan paged fetches (rewards, transfers) can exceed 5 minutes; Vercel Pro max is 800s. */
-export const maxDuration = 800;
+/**
+ * Vercel Hobby and many plans cap at 300s. Vercel Pro/Enterprise can set up to 800s in
+ * Project → Functions or `vercel.json` when you need longer than 5 minutes.
+ */
+export const maxDuration = 300;
 export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {

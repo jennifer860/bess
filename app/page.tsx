@@ -38,7 +38,8 @@ function parseStatementApiPayload(
     throw new Error(
       "The live statement request took too long or the server cut it off (HTML error instead of data). " +
         "This often happens when the API hits the platform’s time limit. Try a shorter date range, " +
-        "On Vercel Pro the statement API uses `maxDuration` 800s; Hobby is capped at 300s. Try a shorter range or upgrade the plan if you still time out.",
+        "Vercel often cuts off at 5 minutes (300s) on the starter tier; the statement route is at that cap. " +
+        "On Vercel Pro/Enterprise you can raise `/api/statement` to 800s in Project → Functions, or use a shorter date range.",
     );
   }
 

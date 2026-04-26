@@ -102,7 +102,7 @@ function etherscanListResult<T>(value: T[] | null | undefined): T[] {
 }
 
 /** Space between each Subscan HTTP call (one global queue) to stay under key limits. */
-const SUBSCAN_MIN_GAP_MS = 450;
+const SUBSCAN_MIN_GAP_MS = 200;
 /** Exponential backoff base when Subscan returns HTTP 429 (code 20008). */
 const RATE_LIMIT_BASE_MS = 1_500;
 const RATE_LIMIT_MAX_RETRIES = 6;
@@ -401,7 +401,7 @@ const V2_ROW = 100;
 const V2_MAX_PAGES_DESC = 100;
 const V2_MAX_PAGES_IN_RANGE = 500;
 /** Paged "download all" style reward fetch — must exceed Subscan’s default list depth (~10k) for long histories. */
-const V2_REWARD_FULL_SCAN_MAX_PAGES = 2000;
+const V2_REWARD_FULL_SCAN_MAX_PAGES = 1000;
 
 async function fetchV2PagedInBlockRange<T extends { block_timestamp: number }>(
   input: StatementInput,
