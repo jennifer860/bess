@@ -1,8 +1,10 @@
 import { toUnixSecondsForChain } from "@/lib/chain-timestamp";
 import { buildStatementSummary } from "@/lib/statement-calculations";
 import {
+  evmBlockNumberAtUnix,
   fetchBalanceHistory,
   fetchCurrentEvmBalanceWei,
+  fetchEvmNativeGlmrAtEvmBlock,
   fetchEvmNftTransfers,
   fetchEvmTokenTransfers,
   fetchEvmTxList,
@@ -77,6 +79,32 @@ function findBalanceForDate(
   date: string,
 ) {
   return history.find((r) => r.date === date)?.balance;
+}
+
+/**
+ * Subscan `balance_history.balance` is usually a **wei** integer string; some responses use a
+ * **decimal GLMR** string. Wrongly dividing display GLMR by 1e18 reads as ~0.
+ */
+function parseSubscanHistoryBalanceGlmr(raw: string | undefined) {
+  if (raw == null) {
+    return 0;
+  }
+  const t = String(raw).trim();
+  if (t === "") {
+    return 0;
+  }
+  if (t.includes(".") || /[eE]/.test(t)) {
+    const n = Number(t);
+    return Number.isFinite(n) ? n : 0;
+  }
+  if (!/^\d+$/.test(t)) {
+    return 0;
+  }
+  try {
+    return weiBigIntToGlmr(BigInt(t));
+  } catch {
+    return 0;
+  }
 }
 
 function isInRange(unixSeconds: number, startUnix: number, endUnix: number) {
@@ -313,7 +341,9 @@ export async function getLiveStatementFromSubscan(
 
   const sortedHistory = [...balanceHistory].sort((a, b) => a.date.localeCompare(b.date));
   const dayAfterEnd = addCalendarDaysUtc(input.endDate, 1);
-  /** Subscan “daily” row for date D = balance at 00:00:00Z on D. Beginning = 00:00Z on the first day; “closing” after the last day = 00:00Z on the next calendar day. */
+  const todayUtc = new Date().toISOString().slice(0, 10);
+  const useCurrentEndFallback = input.endDate >= todayUtc;
+
   const startBalanceRaw =
     findBalanceForDate(sortedHistory, input.startDate) ??
     sortedHistory.find((row) => row.date >= input.startDate)?.balance ??
@@ -323,8 +353,38 @@ export async function getLiveStatementFromSubscan(
     findBalanceForDate(sortedHistory, input.endDate) ??
     [...sortedHistory].reverse().find((row) => row.date <= input.endDate)?.balance ??
     sortedHistory.at(-1)?.balance;
-  const beginningBalance = startBalanceRaw ? weiToTokenAmount(Number(startBalanceRaw)) : 0;
-  const endingBalance = endBalanceRaw ? weiToTokenAmount(Number(endBalanceRaw)) : weiToTokenAmount(currentBalanceWei);
+
+  const subscanBeginning = startBalanceRaw ? parseSubscanHistoryBalanceGlmr(startBalanceRaw) : 0;
+  const subscanEnding = endBalanceRaw
+    ? parseSubscanHistoryBalanceGlmr(endBalanceRaw)
+    : useCurrentEndFallback
+      ? weiToTokenAmount(currentBalanceWei)
+      : 0;
+
+  const tsStart = startOfDayUnix(input.startDate);
+  const tsClose = startOfDayUnix(dayAfterEnd);
+  const [evmBlockStart, evmBlockClose] = await Promise.all([
+    evmBlockNumberAtUnix(input.network, apiKey, tsStart),
+    evmBlockNumberAtUnix(input.network, apiKey, tsClose),
+  ]);
+
+  let beginningBalance: number;
+  let endingBalance: number;
+  let bookendSource: "evm" | "subscan" | "subscan+current" = "subscan";
+
+  if (evmBlockStart != null && evmBlockClose != null) {
+    const [evmBegin, evmEnd] = await Promise.all([
+      fetchEvmNativeGlmrAtEvmBlock(input, apiKey, evmBlockStart),
+      fetchEvmNativeGlmrAtEvmBlock(input, apiKey, evmBlockClose),
+    ]);
+    beginningBalance = evmBegin;
+    endingBalance = evmEnd;
+    bookendSource = "evm";
+  } else {
+    beginningBalance = subscanBeginning;
+    endingBalance = subscanEnding;
+    bookendSource = useCurrentEndFallback && !endBalanceRaw ? "subscan+current" : "subscan";
+  }
 
   const summary = buildStatementSummary(beginningBalance, detailLines);
   summary.endingBalance = endingBalance;
@@ -355,7 +415,9 @@ export async function getLiveStatementFromSubscan(
       evmBlockWindow
         ? `EVM block window (txlist/tokentx): ${evmBlockWindow.from}–${evmBlockWindow.to} (getblocknobytime).`
         : "Could not resolve an EVM block range; Etherscan-style lists use unbounded paging.",
-      "Beginning/ending: Subscan balance_history daily UTC snapshots. Beginning = same calendar day as start date; ending (month close) = snapshot for the calendar day after the last day, i.e. 00:00 UTC on that day = balance after all activity on the last statement day. Query window includes one day before start and one day after end so those rows are present.",
+      bookendSource === "evm"
+        ? `Beginning/ending balances: on-chain GLMR (Etherscan-style balance at block) for EVM blocks ${evmBlockStart} (00:00 UTC ${input.startDate}) and ${evmBlockClose} (00:00 UTC ${dayAfterEnd} = end-of-period close). Subscan balance_history is still queried for context but bookends use chain state when EVM block resolution works.`
+        : "Beginning/ending (fallback when EVM bookends fail): Subscan balance_history. Integer strings = wei; decimal strings = GLMR. For ended periods, current wallet balance is not used as the ending balance. Query window still includes a day before start and a day after end when requesting history.",
       sortedHistory.length
         ? `Balance snapshots returned from ${sortedHistory[0].date} to ${sortedHistory[sortedHistory.length - 1].date}.`
         : "No balance history snapshots were returned for this wallet and period.",

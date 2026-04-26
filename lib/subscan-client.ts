@@ -301,7 +301,7 @@ async function substrateBlockNumberAtUnix(
 }
 
 /** Etherscan `getblocknobytime` — Ethereum L2 / EVM block number (e.g. Moonbeam EVM). */
-async function evmBlockNumberAtUnix(
+export async function evmBlockNumberAtUnix(
   network: string,
   apiKey: string,
   unixSeconds: number,
@@ -319,6 +319,26 @@ async function evmBlockNumberAtUnix(
   }
 }
 
+const WEI_PER_GLMR = BigInt("1000000000000000000");
+
+function glmrFromEvmBalanceWeiString(raw: string) {
+  const t = (raw || "").trim();
+  if (t === "" || !/^\d+$/.test(t)) {
+    return 0;
+  }
+  try {
+    const w = BigInt(t);
+    if (w === BigInt(0)) {
+      return 0;
+    }
+    const intPart = w / WEI_PER_GLMR;
+    const frac = w % WEI_PER_GLMR;
+    return Number(intPart) + Number(frac) / 1e18;
+  } catch {
+    return 0;
+  }
+}
+
 export async function fetchCurrentEvmBalanceWei(input: StatementInput, apiKey: string) {
   const result = await callEtherscanLike<string>(input.network, apiKey, {
     module: "account",
@@ -328,6 +348,24 @@ export async function fetchCurrentEvmBalanceWei(input: StatementInput, apiKey: s
   });
 
   return Number(result);
+}
+
+/**
+ * On-chain **native (GLMR)** balance at a specific EVM block (wei string from Subscan Etherscan API, converted safely).
+ * Preferred for bookends when Subscan’s `balance_history` is empty or non-wei formatted for old dates.
+ */
+export async function fetchEvmNativeGlmrAtEvmBlock(
+  input: StatementInput,
+  apiKey: string,
+  evmBlockNumber: number,
+) {
+  const result = await callEtherscanLike<string>(input.network, apiKey, {
+    module: "account",
+    action: "balance",
+    address: input.walletAddress.trim().toLowerCase(),
+    tag: String(evmBlockNumber),
+  });
+  return glmrFromEvmBalanceWeiString(result);
 }
 
 export async function fetchEvmTxList(
