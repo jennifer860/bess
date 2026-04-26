@@ -88,16 +88,32 @@ export async function fetchCurrentEvmBalanceWei(input: StatementInput, apiKey: s
 }
 
 export async function fetchEvmTxList(input: StatementInput, apiKey: string) {
-  const result = await callEtherscanLike<EvmTx[]>(input.network, apiKey, {
-    module: "account",
-    action: "txlist",
-    address: input.walletAddress,
-    startblock: "0",
-    endblock: "99999999",
-    page: "1",
-    offset: "10000",
-    sort: "asc",
-  });
+  // Subscan enforces a max offset; fetch in pages.
+  const PAGE_SIZE = 100;
+  const MAX_PAGES = 50;
+  const all: EvmTx[] = [];
 
-  return result;
+  for (let page = 1; page <= MAX_PAGES; page += 1) {
+    const batch = await callEtherscanLike<EvmTx[]>(input.network, apiKey, {
+      module: "account",
+      action: "txlist",
+      address: input.walletAddress,
+      startblock: "0",
+      endblock: "99999999",
+      page: String(page),
+      offset: String(PAGE_SIZE),
+      sort: "asc",
+    });
+
+    if (!batch.length) {
+      break;
+    }
+
+    all.push(...batch);
+    if (batch.length < PAGE_SIZE) {
+      break;
+    }
+  }
+
+  return all;
 }

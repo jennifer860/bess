@@ -13,7 +13,7 @@ const NO_ACTIVITY_PERIOD = { startDate: "2022-06-01", endDate: "2022-06-30" };
 
 const DEFAULT_INPUT: StatementInput = {
   network: "Moonbeam",
-  walletAddress: "0x49A5...8aC2",
+  walletAddress: "0x54d91ff83f48837a113ef60db336e3b3cc05a6c1",
   tokenSymbol: "GLMR",
   ...ACTIVITY_PERIOD,
 };

@@ -39,7 +39,7 @@ export function StatementPreview({ statement }: StatementPreviewProps) {
           <dl className="mt-3 space-y-2 text-sm">
             <div className="flex items-start justify-between gap-4">
               <dt className="text-slate-500">Wallet</dt>
-              <dd className="break-all text-right text-slate-900">{statement.walletAddress}</dd>
+              <dd className="break-all text-right font-mono text-slate-900">{statement.walletAddress}</dd>
             </div>
             <div className="flex items-start justify-between gap-4">
               <dt className="text-slate-500">Token</dt>

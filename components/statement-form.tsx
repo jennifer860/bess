@@ -60,13 +60,14 @@ export function StatementForm({
           </select>
         </label>
 
-        <label className="flex flex-col gap-1 text-sm text-slate-700">
+        <label className="flex flex-col gap-1 text-sm text-slate-700 md:col-span-2">
           Wallet Address
           <input
-            className="rounded-lg border border-slate-300 px-3 py-2 text-slate-900"
+            className="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-slate-900"
             value={value.walletAddress}
             onChange={(event) => onChange({ ...value, walletAddress: event.target.value })}
-            placeholder="0x... or substrate address"
+            placeholder="0x54d91ff83f48837a113ef60db336e3b3cc05a6c1"
+            maxLength={42}
           />
         </label>
 
