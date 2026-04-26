@@ -4,7 +4,6 @@ import { buildStatementSummary } from "@/lib/statement-calculations";
 import {
   fetchBalanceHistory,
   fetchCurrentEvmBalanceWei,
-  fetchEvmNativeGlmrAtEvmBlock,
   fetchEvmNftTransfers,
   fetchEvmTokenTransfers,
   fetchEvmTxList,
@@ -12,6 +11,7 @@ import {
   fetchV2RewardSlashForStatementPeriod,
   fetchV2Transfers,
   resolveEvmBlockForStatementBookend,
+  tryMoonbeamGlmrAtEvmBlockRpc,
   resolveEvmBlockWindow,
   resolveSubstrateBlockWindow,
 } from "@/lib/subscan-client";
@@ -377,14 +377,43 @@ export async function getLiveStatementFromSubscan(
     evmBlockStart === evmBlockClose &&
     input.startDate < dayAfterEnd;
 
-  if (evmBlockStart != null && evmBlockClose != null && !evmBlocksDegenerate) {
-    const [evmBegin, evmEnd] = await Promise.all([
-      fetchEvmNativeGlmrAtEvmBlock(input, apiKey, evmBlockStart),
-      fetchEvmNativeGlmrAtEvmBlock(input, apiKey, evmBlockClose),
+  const startRowForBookend = findBalanceForDate(sortedHistory, input.startDate);
+  const endRowForBookend =
+    findBalanceForDate(sortedHistory, dayAfterEnd) ?? findBalanceForDate(sortedHistory, input.endDate);
+  const hasSubscanDateRows = startRowForBookend != null && endRowForBookend != null;
+
+  const currentGlmr = weiToTokenAmount(currentBalanceWei);
+  const periodEnded = input.endDate < todayUtc;
+
+  if (input.network === "Moonbeam" && hasSubscanDateRows) {
+    beginningBalance = parseSubscanHistoryBalanceGlmr(startRowForBookend);
+    endingBalance = parseSubscanHistoryBalanceGlmr(endRowForBookend);
+    bookendSource = "subscan";
+  } else if (
+    input.network === "Moonbeam" &&
+    evmBlockStart != null &&
+    evmBlockClose != null &&
+    !evmBlocksDegenerate
+  ) {
+    const [evmA, evmB] = await Promise.all([
+      tryMoonbeamGlmrAtEvmBlockRpc(input, evmBlockStart),
+      tryMoonbeamGlmrAtEvmBlockRpc(input, evmBlockClose),
     ]);
-    beginningBalance = evmBegin;
-    endingBalance = evmEnd;
-    bookendSource = "evm";
+    const bothRpcOk = evmA != null && evmB != null;
+    const bothMatchCurrent =
+      bothRpcOk &&
+      periodEnded &&
+      Math.abs((evmA as number) - currentGlmr) < 0.0001 &&
+      Math.abs((evmB as number) - currentGlmr) < 0.0001;
+    if (bothRpcOk && !bothMatchCurrent) {
+      beginningBalance = evmA as number;
+      endingBalance = evmB as number;
+      bookendSource = "evm";
+    } else {
+      beginningBalance = subscanBeginning;
+      endingBalance = subscanEnding;
+      bookendSource = useCurrentEndFallback && !endBalanceRaw ? "subscan+current" : "subscan";
+    }
   } else {
     beginningBalance = subscanBeginning;
     endingBalance = subscanEnding;
@@ -421,8 +450,8 @@ export async function getLiveStatementFromSubscan(
         ? `EVM block window (txlist/tokentx): ${evmBlockWindow.from}–${evmBlockWindow.to} (getblocknobytime).`
         : "Could not resolve an EVM block range; Etherscan-style lists use unbounded paging.",
       bookendSource === "evm"
-        ? `Beginning/ending: EVM block from Subscan getblocknobytime (or archival RPC if Subscan is empty); GLMR = eth_getBalance on ${getMoonbeamPublicRpcUrl()} at EVM blocks ${evmBlockStart} and ${evmBlockClose}. (Public RPC is pruned: binary EVM time→height search is skipped on missing blocks so we never pick genesis-area heights like ~10.)`
-        : "Beginning/ending (fallback when EVM bookends fail): Subscan balance_history. Integer strings = wei; decimal strings = GLMR. For ended periods, current wallet balance is not used as the ending balance. Query window still includes a day before start and a day after end when requesting history.",
+        ? `Beginning/ending: eth_getBalance on ${getMoonbeamPublicRpcUrl()} at EVM blocks ${evmBlockStart} and ${evmBlockClose} (heights from Subscan getblocknobytime when available). We avoid Subscan Etherscan “balance at block” — it often equals current GLMR. When daily balance_history has rows for the start and end dates, that path is used instead.`
+        : "Beginning/ending: Subscan balance_history daily rows (wei or GLMR), or current end only for an in-progress through-date. We fall back from RPC when the read would match the live balance for a past period, or when RPC fails.",
       sortedHistory.length
         ? `Balance snapshots returned from ${sortedHistory[0].date} to ${sortedHistory[sortedHistory.length - 1].date}.`
         : "No balance history snapshots were returned for this wallet and period.",

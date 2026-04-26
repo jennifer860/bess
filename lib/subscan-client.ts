@@ -423,8 +423,31 @@ function evmBlockNumberToEtherscanTag(blockNumber: number) {
 }
 
 /**
- * On-chain **native (GLMR)** at an EVM block. For Moonbeam, **eth_getBalance** on public RPC
- * (archival) — Subscan Etherscan balance at block is unreliable and often returns **latest** GLMR.
+ * Moonbeam: **eth_getBalance** at `evmBlockNumber` via public/override RPC only. Returns `null` on
+ * failure (e.g. pruned node, timeout). We do not use Subscan Etherscan balance-at-block here
+ * — that API often returns the **current** GLMR, which produced duplicate / wrong bookends.
+ */
+export async function tryMoonbeamGlmrAtEvmBlockRpc(
+  input: StatementInput,
+  evmBlockNumber: number,
+): Promise<number | null> {
+  if (input.network !== "Moonbeam") {
+    return null;
+  }
+  try {
+    return await ethGetBalanceGlmrAtEvmBlockFromRpc(
+      getMoonbeamPublicRpcUrl(),
+      input.walletAddress.trim().toLowerCase(),
+      evmBlockNumber,
+    );
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * On-chain native at an EVM block via Subscan Etherscan APIs (non-Moonbeam / legacy). For Moonbeam
+ * in production we use `tryMoonbeamGlmrAtEvmBlockRpc` + `balance_history` in the statement path.
  */
 export async function fetchEvmNativeGlmrAtEvmBlock(
   input: StatementInput,
@@ -432,15 +455,7 @@ export async function fetchEvmNativeGlmrAtEvmBlock(
   evmBlockNumber: number,
 ) {
   if (input.network === "Moonbeam") {
-    try {
-      return await ethGetBalanceGlmrAtEvmBlockFromRpc(
-        getMoonbeamPublicRpcUrl(),
-        input.walletAddress.trim().toLowerCase(),
-        evmBlockNumber,
-      );
-    } catch {
-      /* Subscan as last resort */
-    }
+    return (await tryMoonbeamGlmrAtEvmBlockRpc(input, evmBlockNumber)) ?? 0;
   }
   const blockno = String(Math.max(0, Math.floor(evmBlockNumber)));
   const address = input.walletAddress.trim().toLowerCase();
