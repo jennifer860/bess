@@ -2,6 +2,9 @@ import { NextResponse } from "next/server";
 import { getLiveStatementFromSubscan } from "@/lib/subscan-statement-service";
 import type { StatementInput } from "@/types/statement";
 
+/** Subscan paged reward fetches can take a long time for large staking histories. */
+export const maxDuration = 300;
+
 export async function POST(request: Request) {
   try {
     const apiKey = process.env.SUBSCAN_API_KEY;

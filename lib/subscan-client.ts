@@ -500,23 +500,72 @@ export async function fetchV2RewardSlash(
 }
 
 /**
- * Staking rewards in `[startUnix, endUnix]` using the same v2 endpoint as the Subscan Reward tab /
- * "Download all data" flow (see
- * [Account reward and slash (v2)](https://support.subscan.io/api-4231209)) — no `block_range`, page
- * with `order: "desc"` until the page’s newest event is before the period start. This avoids both
- * wrong `block_range` bounds and the ~10k-row cap of `fetchV2RewardSlash` without a block window.
+ * Staking rewards in `[startUnix, endUnix]`. Tries (1) v2 + `block_range` when
+ * `substrateBlockWindow` is known (faster, fewer API calls), then (2) full paged fetches
+ * (same [v2 `reward_slash` endpoint](https://support.subscan.io/api-4231209) the explorer uses).
+ * The v2 request schema does not document `order`; the server may return **oldest data on page 0**,
+ * so we must not use `rows[0]` as the page “newest” timestamp — that caused an instant empty result.
  */
 export async function fetchV2RewardSlashForStatementPeriod(
   input: StatementInput,
   apiKey: string,
   startUnix: number,
   endUnix: number,
+  substrateBlockWindow: StatementBlockWindow | null = null,
 ): Promise<V2RewardSlash[]> {
+  const inWindow = (r: V2RewardSlash) => {
+    const ts = toUnixSecondsForChain(r.block_timestamp);
+    return ts >= startUnix && ts <= endUnix;
+  };
+
+  const normalized: StatementInput = { ...input, walletAddress: input.walletAddress.trim() };
+
+  if (substrateBlockWindow) {
+    const byBlock = await fetchV2PagedInBlockRange<V2RewardSlash>(
+      { ...normalized, walletAddress: normalized.walletAddress.toLowerCase() },
+      apiKey,
+      "/api/v2/scan/account/reward_slash",
+      "list",
+      substrateBlockWindow,
+      { category: "Reward" },
+    );
+    const filtered = byBlock.filter(inWindow);
+    if (filtered.length > 0) {
+      return filtered;
+    }
+  }
+
+  return fetchV2RewardSlashByPaging(
+    { ...normalized, walletAddress: normalized.walletAddress.toLowerCase() },
+    apiKey,
+    startUnix,
+    endUnix,
+  );
+}
+
+/**
+ * Paged v2 `reward_slash` without a block filter, matching the explorer’s full list. Stops by
+ * comparing page-0 and page-1 `max(block_timestamp)` to see whether new rows appear on **lower** or
+ * **higher** page indices (the API does not document `order`).
+ */
+async function fetchV2RewardSlashByPaging(
+  input: StatementInput,
+  apiKey: string,
+  startUnix: number,
+  endUnix: number,
+): Promise<V2RewardSlash[]> {
+  const address = input.walletAddress.trim();
+  if (!address) {
+    return [];
+  }
+
   const collected: V2RewardSlash[] = [];
+  let page0Max: number | null = null;
+  let page1Max: number | null = null;
 
   for (let page = 0; page < V2_REWARD_FULL_SCAN_MAX_PAGES; page += 1) {
     const raw = await callSubscanPost<Record<string, unknown> | null>(input.network, apiKey, "/api/v2/scan/account/reward_slash", {
-      address: input.walletAddress,
+      address: address.toLowerCase(),
       row: V2_ROW,
       page,
       order: "desc",
@@ -529,16 +578,33 @@ export async function fetchV2RewardSlashForStatementPeriod(
       break;
     }
 
-    const newestTs = toUnixSecondsForChain(rows[0].block_timestamp);
-    if (newestTs < startUnix) {
-      break;
-    }
+    const tss = rows.map((r) => toUnixSecondsForChain(r.block_timestamp));
+    const pageMax = Math.max(...tss);
+    const pageMin = Math.min(...tss);
 
     for (const row of rows) {
       const ts = toUnixSecondsForChain(row.block_timestamp);
       if (ts >= startUnix && ts <= endUnix) {
         collected.push(row);
       }
+    }
+
+    if (rows.length < V2_ROW) {
+      break;
+    }
+
+    if (page === 0) {
+      page0Max = pageMax;
+    } else if (page === 1) {
+      page1Max = pageMax;
+    }
+
+    const newerOnLowerPage = page0Max != null && page1Max != null ? page0Max > page1Max : null;
+    if (newerOnLowerPage === true && pageMax < startUnix) {
+      break;
+    }
+    if (newerOnLowerPage === false && pageMin > endUnix) {
+      break;
     }
   }
 

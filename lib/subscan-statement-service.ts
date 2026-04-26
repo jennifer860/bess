@@ -41,6 +41,16 @@ function weiBigIntToGlmr(wei: bigint) {
 function parseRewardWeiString(raw: string | undefined) {
   if (raw == null) return BigInt(0);
   const t = raw.trim();
+  if (t === "") {
+    return BigInt(0);
+  }
+  if (t.includes(".") || t.includes("e") || t.includes("E")) {
+    const n = Number(t);
+    if (Number.isFinite(n) && n > 0) {
+      return BigInt(Math.round(n * Number(TOKEN_DECIMALS)));
+    }
+    return BigInt(0);
+  }
   if (!/^\d+$/.test(t)) {
     return BigInt(0);
   }
@@ -97,7 +107,7 @@ export async function getLiveStatementFromSubscan(
       fetchCurrentEvmBalanceWei(input, apiKey),
       fetchBalanceHistory(input, apiKey),
       fetchV2Transfers(input, apiKey, substrateBlockWindow),
-      fetchV2RewardSlashForStatementPeriod(input, apiKey, startUnix, endUnix),
+      fetchV2RewardSlashForStatementPeriod(input, apiKey, startUnix, endUnix, substrateBlockWindow),
       fetchV2Extrinsics(input, apiKey, substrateBlockWindow),
       fetchEvmTxList(input, apiKey, evmBlockWindow),
       fetchEvmTokenTransfers(input, apiKey, evmBlockWindow),
