@@ -300,29 +300,55 @@ async function substrateBlockNumberAtUnix(
   return null;
 }
 
-/** Etherscan `getblocknobytime` — Ethereum L2 / EVM block number (e.g. Moonbeam EVM). */
+/**
+ * Etherscan `getblocknobytime` for Moonbeam/Subscan can expect **timestamp in milliseconds**; passing
+ * seconds is read as 1970-era time and returns a very low EVM block (e.g. ~10), and `balance&tag=0xa`
+ * then both bookends look like ~10 GLMR. Try ms first, then sec; reject tiny blocks for 2020+ times.
+ */
 export async function evmBlockNumberAtUnix(
   network: string,
   apiKey: string,
   unixSeconds: number,
 ): Promise<number | null> {
-  try {
-    const raw = await callEtherscanLike<string>(network, apiKey, {
-      module: "block",
-      action: "getblocknobytime",
-      timestamp: String(unixSeconds),
-      closest: "before",
-    });
-    return parseBlockNumberFromApiValue(raw);
-  } catch {
-    return null;
+  const isModernEra = unixSeconds >= 1_600_000_000; // after ~2020
+  const minPlausibleEvmBlock = 50_000;
+  for (const ts of [unixSeconds * 1000, unixSeconds]) {
+    try {
+      const raw = await callEtherscanLike<string>(network, apiKey, {
+        module: "block",
+        action: "getblocknobytime",
+        timestamp: String(ts),
+        closest: "before",
+      });
+      const n = parseBlockNumberFromApiValue(raw);
+      if (n == null || n <= 0) {
+        continue;
+      }
+      if (isModernEra && n < minPlausibleEvmBlock) {
+        continue;
+      }
+      return n;
+    } catch {
+      /* try other timestamp unit or fail */
+    }
   }
+  return null;
 }
 
 const WEI_PER_GLMR = BigInt("1000000000000000000");
 
 function glmrFromEvmBalanceWeiString(raw: string) {
-  const t = (raw || "").trim();
+  let t = (raw || "").trim();
+  if (t === "" || t === "0x" || t === "0X") {
+    return 0;
+  }
+  if (t.startsWith("0x") || t.startsWith("0X")) {
+    try {
+      t = BigInt(t).toString(10);
+    } catch {
+      return 0;
+    }
+  }
   if (t === "" || !/^\d+$/.test(t)) {
     return 0;
   }
@@ -360,21 +386,33 @@ function evmBlockNumberToEtherscanTag(blockNumber: number) {
 }
 
 /**
- * On-chain **native (GLMR)** balance at a specific EVM block (wei string from Subscan Etherscan API, converted safely).
- * Preferred for bookends when Subscan’s `balance_history` is empty or non-wei formatted for old dates.
+ * On-chain **native (GLMR)** at an EVM block. Prefer `balancehistory&blockno` (historical, decimal block)
+ * so old heights are correct; `balance&tag=0x..` is often limited to recent blocks and can misread.
  */
 export async function fetchEvmNativeGlmrAtEvmBlock(
   input: StatementInput,
   apiKey: string,
   evmBlockNumber: number,
 ) {
-  const result = await callEtherscanLike<string>(input.network, apiKey, {
-    module: "account",
-    action: "balance",
-    address: input.walletAddress.trim().toLowerCase(),
-    tag: evmBlockNumberToEtherscanTag(evmBlockNumber),
-  });
-  return glmrFromEvmBalanceWeiString(result);
+  const blockno = String(Math.max(0, Math.floor(evmBlockNumber)));
+  const address = input.walletAddress.trim().toLowerCase();
+  try {
+    const h = await callEtherscanLike<string>(input.network, apiKey, {
+      module: "account",
+      action: "balancehistory",
+      address,
+      blockno,
+    });
+    return glmrFromEvmBalanceWeiString(String(h));
+  } catch {
+    const result = await callEtherscanLike<string>(input.network, apiKey, {
+      module: "account",
+      action: "balance",
+      address,
+      tag: evmBlockNumberToEtherscanTag(evmBlockNumber),
+    });
+    return glmrFromEvmBalanceWeiString(String(result));
+  }
 }
 
 export async function fetchEvmTxList(
