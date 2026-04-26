@@ -737,9 +737,9 @@ export async function fetchV2RewardSlash(
 
 /**
  * Staking rewards in `[startUnix, endUnix]`. (1) v2 + `block_range` when known, (2) same URL with
- * split `block_range` chunks if the wide list is empty, (3) v2 global paging (newest-first) with
- * early stop when a page is entirely before the statement start + a page cap, (4) v1 fallback
- * with the same rules.
+ * split `block_range` chunks if the wide list is empty, (3) v2 global paging with a guarded
+ * early stop (see `fetchRewardSlashV2UnboundedPages`) and page cap, (4) v1 fallback with the
+ * same rules.
  */
 export async function fetchV2RewardSlashForStatementPeriod(
   input: StatementInput,
@@ -802,11 +802,11 @@ export async function fetchV2RewardSlashForStatementPeriod(
 }
 
 /**
- * v2: newest-first pages (default on reward_slash). We stop after **two** consecutive full
- * (100-row) pages whose newest reward is still strictly before the statement start — Subscan
- * order can wobble, so we require two. (Previously we only stopped on a short/empty page, so
- * active accounts could walk ~1000 full pages and exceed serverless time limits.) Hard page cap
- * remains as a backstop. See [v2 list](https://support.subscan.io/api-4231209).
+ * v2: default reward_slash ordering (newest-like pages). We may stop after **two** consecutive
+ * full 100-row pages that are **entirely** before the statement `start` **only if** we have
+ * already collected at least one in-window row. Otherwise (including non-monotone pagination) two
+ * such pages can appear *before* the pages that hold the user’s period — and exiting early
+ * would drop all rewards. Hard page cap still limits runaway. See [v2 list](https://support.subscan.io/api-4231209).
  */
 async function fetchRewardSlashV2UnboundedPages(
   input: StatementInput,
@@ -827,7 +827,6 @@ async function fetchRewardSlashV2UnboundedPages(
       address: address.toLowerCase(),
       row: V2_ROW,
       page,
-      order: "desc",
       ...REWARD_SLASH_BODY,
     });
     const data = raw && typeof raw === "object" ? raw : {};
@@ -852,7 +851,7 @@ async function fetchRewardSlashV2UnboundedPages(
     }
     if (rows.length === V2_ROW && maxTs < startUnix) {
       consecutiveFullPageBeforeStart += 1;
-      if (consecutiveFullPageBeforeStart >= 2) {
+      if (collected.length > 0 && consecutiveFullPageBeforeStart >= 2) {
         break;
       }
     } else {
@@ -865,7 +864,8 @@ async function fetchRewardSlashV2UnboundedPages(
 
 /**
  * v1: same as explorer’s legacy [`/api/scan/account/reward_slash`](https://support.subscan.io/api-4193056)
- * when v2 returns no rows in-range (observed in some EVM H160 + staking setups).
+ * when v2 returns no rows in-range (observed in some EVM H160 + staking setups). Early-stop rule
+ * matches v2: two consecutive all-before-start full pages only after we have in-window rows.
  */
 async function fetchRewardSlashV1UnboundedPages(
   input: StatementInput,
@@ -910,7 +910,7 @@ async function fetchRewardSlashV1UnboundedPages(
     }
     if (rows.length === V2_ROW && maxTs < startUnix) {
       consecutiveFullPageBeforeStart += 1;
-      if (consecutiveFullPageBeforeStart >= 2) {
+      if (collected.length > 0 && consecutiveFullPageBeforeStart >= 2) {
         break;
       }
     } else {

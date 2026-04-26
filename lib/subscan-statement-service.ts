@@ -714,7 +714,7 @@ export async function getLiveStatementFromSubscan(
       a.date === b.date ? a.category.localeCompare(b.category) : a.date.localeCompare(b.date),
     ),
     notes: [
-      "Live data source: Subscan balance history + transfers + staking rewards (v2 reward_slash, same data as Reward tab: block-scoped and chunked fetches when possible, otherwise paged newest-first with early stop once pages are before the start date) + extrinsics + EVM activity.",
+      "Live data source: Subscan balance history + transfers + staking rewards (v2 reward_slash, same data as Reward tab: block-scoped and chunked fetches when possible, otherwise paged with a cap; optional early stop only after at least one in-window row and two full pages entirely before the period start) + extrinsics + EVM activity.",
       substrateBlockWindow
         ? `Substrate block window (v2 transfers/extrinsics): ${substrateBlockWindow.from}–${substrateBlockWindow.to} (from /api/scan/block — not EVM block height).`
         : "Could not resolve a Substrate block range from dates; v2 transfers/extrinsics use unbounded paging (slower, may be incomplete for very active accounts).",
