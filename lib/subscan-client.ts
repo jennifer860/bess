@@ -367,15 +367,27 @@ export async function fetchEvmTxList(
   return all;
 }
 
-export async function fetchBalanceHistory(input: StatementInput, apiKey: string) {
+export type BalanceHistoryRange = { start: string; end: string };
+
+/**
+ * [Account Balance History](https://support.subscan.io/api-6449744) — on Moonbeam, **daily** UTC
+ * snapshots (not block-level). `start` / `end` are YYYY-MM-DD and expand the range you query.
+ */
+export async function fetchBalanceHistory(
+  input: StatementInput,
+  apiKey: string,
+  range: BalanceHistoryRange | null = null,
+) {
+  const start = range?.start ?? input.startDate;
+  const end = range?.end ?? input.endDate;
   const data = await callSubscanPost<{ history?: BalanceHistoryItem[] }>(
     input.network,
     apiKey,
     "/api/scan/account/balance_history",
     {
-      address: input.walletAddress,
-      start: input.startDate,
-      end: input.endDate,
+      address: input.walletAddress.trim().toLowerCase(),
+      start,
+      end,
     },
   );
 

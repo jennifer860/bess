@@ -65,6 +65,20 @@ function toIsoDate(unixSeconds: number) {
   return new Date(unixSeconds * 1000).toISOString().slice(0, 10);
 }
 
+/** Add (or subtract) whole calendar days in UTC; YYYY-MM-DD in/out. */
+function addCalendarDaysUtc(yyyyMmDd: string, deltaDays: number) {
+  const [y, m, d] = yyyyMmDd.split("-").map(Number);
+  const t = Date.UTC(y, m - 1, d) + deltaDays * 86_400_000;
+  return new Date(t).toISOString().slice(0, 10);
+}
+
+function findBalanceForDate(
+  history: { date: string; balance: string }[],
+  date: string,
+) {
+  return history.find((r) => r.date === date)?.balance;
+}
+
 function isInRange(unixSeconds: number, startUnix: number, endUnix: number) {
   return unixSeconds >= startUnix && unixSeconds <= endUnix;
 }
@@ -105,7 +119,10 @@ export async function getLiveStatementFromSubscan(
   const [currentBalanceWei, balanceHistory, transfers, rewards, extrinsics, evmTxs, erc20Txs, nftTxs] =
     await Promise.all([
       fetchCurrentEvmBalanceWei(input, apiKey),
-      fetchBalanceHistory(input, apiKey),
+      fetchBalanceHistory(input, apiKey, {
+        start: addCalendarDaysUtc(input.startDate, -1),
+        end: addCalendarDaysUtc(input.endDate, 1),
+      }),
       fetchV2Transfers(input, apiKey, substrateBlockWindow),
       fetchV2RewardSlashForStatementPeriod(input, apiKey, startUnix, endUnix, substrateBlockWindow),
       fetchV2Extrinsics(input, apiKey, substrateBlockWindow),
@@ -295,9 +312,17 @@ export async function getLiveStatementFromSubscan(
   for (const [date, count] of transferCountByDate) addCountOnlyCategory(date, "Transfers", count);
 
   const sortedHistory = [...balanceHistory].sort((a, b) => a.date.localeCompare(b.date));
-  const startBalanceRaw = sortedHistory.find((row) => row.date >= input.startDate)?.balance ?? sortedHistory[0]?.balance;
+  const dayAfterEnd = addCalendarDaysUtc(input.endDate, 1);
+  /** Subscan “daily” row for date D = balance at 00:00:00Z on D. Beginning = 00:00Z on the first day; “closing” after the last day = 00:00Z on the next calendar day. */
+  const startBalanceRaw =
+    findBalanceForDate(sortedHistory, input.startDate) ??
+    sortedHistory.find((row) => row.date >= input.startDate)?.balance ??
+    sortedHistory[0]?.balance;
   const endBalanceRaw =
-    [...sortedHistory].reverse().find((row) => row.date <= input.endDate)?.balance ?? sortedHistory.at(-1)?.balance;
+    findBalanceForDate(sortedHistory, dayAfterEnd) ??
+    findBalanceForDate(sortedHistory, input.endDate) ??
+    [...sortedHistory].reverse().find((row) => row.date <= input.endDate)?.balance ??
+    sortedHistory.at(-1)?.balance;
   const beginningBalance = startBalanceRaw ? weiToTokenAmount(Number(startBalanceRaw)) : 0;
   const endingBalance = endBalanceRaw ? weiToTokenAmount(Number(endBalanceRaw)) : weiToTokenAmount(currentBalanceWei);
 
@@ -330,7 +355,7 @@ export async function getLiveStatementFromSubscan(
       evmBlockWindow
         ? `EVM block window (txlist/tokentx): ${evmBlockWindow.from}–${evmBlockWindow.to} (getblocknobytime).`
         : "Could not resolve an EVM block range; Etherscan-style lists use unbounded paging.",
-      "Beginning/ending balances are taken from Subscan balance history snapshots for the selected dates.",
+      "Beginning/ending: Subscan balance_history daily UTC snapshots. Beginning = same calendar day as start date; ending (month close) = snapshot for the calendar day after the last day, i.e. 00:00 UTC on that day = balance after all activity on the last statement day. Query window includes one day before start and one day after end so those rows are present.",
       sortedHistory.length
         ? `Balance snapshots returned from ${sortedHistory[0].date} to ${sortedHistory[sortedHistory.length - 1].date}.`
         : "No balance history snapshots were returned for this wallet and period.",
