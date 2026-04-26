@@ -7,7 +7,7 @@ import {
   fetchEvmTokenTransfers,
   fetchEvmTxList,
   fetchV2Extrinsics,
-  fetchV2RewardSlash,
+  fetchV2RewardSlashForStatementPeriod,
   fetchV2Transfers,
   resolveEvmBlockWindow,
   resolveSubstrateBlockWindow,
@@ -84,6 +84,9 @@ export async function getLiveStatementFromSubscan(
     throw new Error("Live Moonbeam mode requires a valid 0x EVM wallet address (42 characters).");
   }
 
+  const startUnix = startOfDayUnix(input.startDate);
+  const endUnix = endOfDayUnix(input.endDate);
+
   const [substrateBlockWindow, evmBlockWindow] = await Promise.all([
     resolveSubstrateBlockWindow(input, apiKey),
     resolveEvmBlockWindow(input, apiKey),
@@ -94,7 +97,7 @@ export async function getLiveStatementFromSubscan(
       fetchCurrentEvmBalanceWei(input, apiKey),
       fetchBalanceHistory(input, apiKey),
       fetchV2Transfers(input, apiKey, substrateBlockWindow),
-      fetchV2RewardSlash(input, apiKey, substrateBlockWindow),
+      fetchV2RewardSlashForStatementPeriod(input, apiKey, startUnix, endUnix),
       fetchV2Extrinsics(input, apiKey, substrateBlockWindow),
       fetchEvmTxList(input, apiKey, evmBlockWindow),
       fetchEvmTokenTransfers(input, apiKey, evmBlockWindow),
@@ -102,8 +105,6 @@ export async function getLiveStatementFromSubscan(
     ]);
 
   const wallet = input.walletAddress.toLowerCase();
-  const startUnix = startOfDayUnix(input.startDate);
-  const endUnix = endOfDayUnix(input.endDate);
 
   const dayBuckets = new Map<string, DayAccumulator>();
   const detailLines: StatementLine[] = [];
@@ -173,9 +174,8 @@ export async function getLiveStatementFromSubscan(
     }
   }
 
-  const rewardsInPeriod = rewards.filter((reward) =>
-    isInRange(toUnixSecondsForChain(reward.block_timestamp), startUnix, endUnix),
-  );
+  /** Already filtered in `fetchV2RewardSlashForStatementPeriod` to the statement window. */
+  const rewardsInPeriod = rewards;
   const rewardByDate = new Map<string, bigint>();
   for (const reward of rewardsInPeriod) {
     const date = toIsoDate(toUnixSecondsForChain(reward.block_timestamp));
@@ -313,10 +313,10 @@ export async function getLiveStatementFromSubscan(
       a.date === b.date ? a.category.localeCompare(b.category) : a.date.localeCompare(b.date),
     ),
     notes: [
-      "Live data source: Subscan balance history + transfers + reward/slash + extrinsics + EVM activity.",
+      "Live data source: Subscan balance history + transfers + staking rewards (v2 reward_slash, same data as Reward tab / Download all, paged newest-first then filtered by date) + extrinsics + EVM activity.",
       substrateBlockWindow
-        ? `Substrate block window (v2 transfers/rewards/extrinsics): ${substrateBlockWindow.from}–${substrateBlockWindow.to} (from /api/scan/block timestamps — not EVM block height).`
-        : "Could not resolve a Substrate block range from dates; v2 list APIs use unbounded paging (slower, may be incomplete for very active accounts).",
+        ? `Substrate block window (v2 transfers/extrinsics): ${substrateBlockWindow.from}–${substrateBlockWindow.to} (from /api/scan/block — not EVM block height).`
+        : "Could not resolve a Substrate block range from dates; v2 transfers/extrinsics use unbounded paging (slower, may be incomplete for very active accounts).",
       evmBlockWindow
         ? `EVM block window (txlist/tokentx): ${evmBlockWindow.from}–${evmBlockWindow.to} (getblocknobytime).`
         : "Could not resolve an EVM block range; Etherscan-style lists use unbounded paging.",

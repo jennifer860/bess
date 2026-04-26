@@ -1,3 +1,4 @@
+import { toUnixSecondsForChain } from "@/lib/chain-timestamp";
 import type { StatementInput } from "@/types/statement";
 
 const NETWORK_TO_API_HOST: Record<string, string> = {
@@ -383,6 +384,8 @@ export async function fetchBalanceHistory(input: StatementInput, apiKey: string)
 const V2_ROW = 100;
 const V2_MAX_PAGES_DESC = 100;
 const V2_MAX_PAGES_IN_RANGE = 500;
+/** Paged "download all" style reward fetch — must exceed Subscan’s default list depth (~10k) for long histories. */
+const V2_REWARD_FULL_SCAN_MAX_PAGES = 2000;
 
 async function fetchV2PagedInBlockRange<T extends { block_timestamp: number }>(
   input: StatementInput,
@@ -494,6 +497,52 @@ export async function fetchV2RewardSlash(
   return fetchV2PagedNewestFirst<V2RewardSlash>(input, apiKey, "/api/v2/scan/account/reward_slash", "list", {
     category: "Reward",
   });
+}
+
+/**
+ * Staking rewards in `[startUnix, endUnix]` using the same v2 endpoint as the Subscan Reward tab /
+ * "Download all data" flow (see
+ * [Account reward and slash (v2)](https://support.subscan.io/api-4231209)) — no `block_range`, page
+ * with `order: "desc"` until the page’s newest event is before the period start. This avoids both
+ * wrong `block_range` bounds and the ~10k-row cap of `fetchV2RewardSlash` without a block window.
+ */
+export async function fetchV2RewardSlashForStatementPeriod(
+  input: StatementInput,
+  apiKey: string,
+  startUnix: number,
+  endUnix: number,
+): Promise<V2RewardSlash[]> {
+  const collected: V2RewardSlash[] = [];
+
+  for (let page = 0; page < V2_REWARD_FULL_SCAN_MAX_PAGES; page += 1) {
+    const raw = await callSubscanPost<Record<string, unknown> | null>(input.network, apiKey, "/api/v2/scan/account/reward_slash", {
+      address: input.walletAddress,
+      row: V2_ROW,
+      page,
+      order: "desc",
+      category: "Reward",
+    });
+    const data = raw && typeof raw === "object" ? raw : {};
+    const list = data.list;
+    const rows = Array.isArray(list) ? (list as V2RewardSlash[]) : [];
+    if (rows.length === 0) {
+      break;
+    }
+
+    const newestTs = toUnixSecondsForChain(rows[0].block_timestamp);
+    if (newestTs < startUnix) {
+      break;
+    }
+
+    for (const row of rows) {
+      const ts = toUnixSecondsForChain(row.block_timestamp);
+      if (ts >= startUnix && ts <= endUnix) {
+        collected.push(row);
+      }
+    }
+  }
+
+  return collected;
 }
 
 export async function fetchEvmTokenTransfers(
