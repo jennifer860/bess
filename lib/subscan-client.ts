@@ -350,6 +350,15 @@ export async function fetchCurrentEvmBalanceWei(input: StatementInput, apiKey: s
   return Number(result);
 }
 
+/** Subscan’s `EtherscanAccountBalanceParam.tag` (evm_block) expects hex, not a decimal string. */
+function evmBlockNumberToEtherscanTag(blockNumber: number) {
+  if (!Number.isFinite(blockNumber) || blockNumber < 0) {
+    return "latest";
+  }
+  const n = Math.floor(blockNumber);
+  return `0x${n.toString(16)}`;
+}
+
 /**
  * On-chain **native (GLMR)** balance at a specific EVM block (wei string from Subscan Etherscan API, converted safely).
  * Preferred for bookends when Subscan’s `balance_history` is empty or non-wei formatted for old dates.
@@ -363,7 +372,7 @@ export async function fetchEvmNativeGlmrAtEvmBlock(
     module: "account",
     action: "balance",
     address: input.walletAddress.trim().toLowerCase(),
-    tag: String(evmBlockNumber),
+    tag: evmBlockNumberToEtherscanTag(evmBlockNumber),
   });
   return glmrFromEvmBalanceWeiString(result);
 }
