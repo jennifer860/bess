@@ -449,7 +449,8 @@ export async function tryMoonbeamGlmrAtEvmBlockRpc(
 
 /**
  * On-chain native at an EVM block via Subscan Etherscan APIs (non-Moonbeam / legacy). For Moonbeam
- * in production we use `tryMoonbeamGlmrAtEvmBlockRpc` + `balance_history` in the statement path.
+ * in production we use `balance_history` for statement bookends. Moonbeam bookends do not use
+ * this (EVM) path — see `subscan-statement-service`.
  */
 export async function fetchEvmNativeGlmrAtEvmBlock(
   input: StatementInput,

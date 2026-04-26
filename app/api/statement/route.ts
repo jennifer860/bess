@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { MOONBEAM_EARLIEST_STATEMENT_DATE } from "@/lib/chain-constants";
 import { getLiveStatementFromSubscan } from "@/lib/subscan-statement-service";
 import type { StatementInput } from "@/types/statement";
 
@@ -22,6 +23,18 @@ export async function POST(request: Request) {
     const input = (await request.json()) as StatementInput;
     if (!input?.walletAddress || !input?.network || !input?.startDate || !input?.endDate) {
       return NextResponse.json({ error: "Missing required statement fields." }, { status: 400 });
+    }
+
+    if (
+      input.network === "Moonbeam" &&
+      (input.startDate < MOONBEAM_EARLIEST_STATEMENT_DATE || input.endDate < MOONBEAM_EARLIEST_STATEMENT_DATE)
+    ) {
+      return NextResponse.json(
+        {
+          error: `Moonbeam was not live before ${MOONBEAM_EARLIEST_STATEMENT_DATE}. Use that date or later for start and end.`,
+        },
+        { status: 400 },
+      );
     }
 
     const statement = await getLiveStatementFromSubscan(input, apiKey);

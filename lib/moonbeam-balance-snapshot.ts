@@ -12,9 +12,9 @@ function startOfNextCalendarDayUtcSeconds(yyyyMmDd: string) {
 }
 
 /**
- * One input date → one GLMR number: native balance at the **end** of that calendar day (UTC),
- * i.e. immediately before the next day starts. Same convention as statement `endDate` bookend
- * (`tsClose` = start of the day after `endDate`).
+ * One input date → one GLMR number via EVM `eth_getBalance` at a resolved block. On Moonbeam that
+ * is **reducible** (MetaMask-style), not total (staked) GLMR. For “total in wallet as of date” use
+ * Subscan `balance_history` (see live statement) instead of this helper.
  */
 export async function getMoonbeamGlmrAsOfEndOfCalendarDayUtc(
   input: StatementInput,

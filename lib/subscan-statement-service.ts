@@ -1,5 +1,4 @@
 import { toUnixSecondsForChain } from "@/lib/chain-timestamp";
-import { getMoonbeamPublicRpcUrl } from "@/lib/moonbeam-evm-rpc";
 import { buildStatementSummary } from "@/lib/statement-calculations";
 import {
   fetchBalanceHistory,
@@ -10,8 +9,6 @@ import {
   fetchV2Extrinsics,
   fetchV2RewardSlashForStatementPeriod,
   fetchV2Transfers,
-  resolveEvmBlockForStatementBookend,
-  tryMoonbeamGlmrAtEvmBlockRpc,
   resolveEvmBlockWindow,
   resolveSubstrateBlockWindow,
 } from "@/lib/subscan-client";
@@ -83,8 +80,9 @@ function findBalanceForDate(
 }
 
 /**
- * Subscan `balance_history.balance` is usually a **wei** integer string; some responses use a
- * **decimal GLMR** string. Wrongly dividing display GLMR by 1e18 reads as ~0.
+ * Subscan `balance_history.balance` = **total** GLMR in the account (per Subscan), usually a **wei**
+ * integer string; some responses use a **decimal GLMR** string. Wrongly dividing display GLMR by
+ * 1e18 reads as ~0.
  */
 function parseSubscanHistoryBalanceGlmr(raw: string | undefined) {
   if (raw == null) {
@@ -345,6 +343,25 @@ export async function getLiveStatementFromSubscan(
   const todayUtc = new Date().toISOString().slice(0, 10);
   const useCurrentEndFallback = input.endDate >= todayUtc;
 
+  /** Subscan `balance_history` = total GLMR (free + staked, etc.); not the EVM `eth_getBalance` “reducible” amount. */
+  let currentGlmrTotal = weiToTokenAmount(currentBalanceWei);
+  const todayBalanceFromHistory = findBalanceForDate(sortedHistory, todayUtc);
+  if (todayBalanceFromHistory) {
+    const p = parseSubscanHistoryBalanceGlmr(todayBalanceFromHistory);
+    if (p > 1e-12) {
+      currentGlmrTotal = p;
+    }
+  } else {
+    const todayOnly = await fetchBalanceHistory(input, apiKey, { start: todayUtc, end: todayUtc });
+    const row = todayOnly.find((r) => r.date === todayUtc) ?? todayOnly[0];
+    if (row?.balance) {
+      const p = parseSubscanHistoryBalanceGlmr(row.balance);
+      if (p > 1e-12) {
+        currentGlmrTotal = p;
+      }
+    }
+  }
+
   const startBalanceRaw =
     findBalanceForDate(sortedHistory, input.startDate) ??
     sortedHistory.find((row) => row.date >= input.startDate)?.balance ??
@@ -359,16 +376,13 @@ export async function getLiveStatementFromSubscan(
   const subscanEnding = endBalanceRaw
     ? parseSubscanHistoryBalanceGlmr(endBalanceRaw)
     : useCurrentEndFallback
-      ? weiToTokenAmount(currentBalanceWei)
+      ? currentGlmrTotal
       : 0;
-  /** If Subscan’s loose/history path produced no values (common for 2022–23 before API rows exist). */
-  const looseSubscanAllZero = subscanBeginning === 0 && subscanEnding === 0;
 
   /** `beginning=0` → `ending` = sum of in − out for the same lines the summary uses. */
   const netFromLines = buildStatementSummary(0, detailLines).endingBalance;
-  const currentGlmr = weiToTokenAmount(currentBalanceWei);
   const periodEnded = input.endDate < todayUtc;
-  const nearCurrent = (n: number) => Math.abs(n - currentGlmr) < 0.0001;
+  const nearCurrent = (n: number) => Math.abs(n - currentGlmrTotal) < 0.0001;
 
   const startRowForBookend = findBalanceForDate(sortedHistory, input.startDate);
   const endRowForBookend =
@@ -390,22 +404,14 @@ export async function getLiveStatementFromSubscan(
     nearCurrent(begParsedExact) &&
     Math.abs(netFromLines) > 1e-8;
 
-  // Bookends = native GLMR at EVM blocks for: start of first day, start of (end+1) day — same
-  // as `getMoonbeamGlmrAsOfEndOfCalendarDayUtc` for a single "as of that day" snapshot.
-  const tsStart = startOfDayUnix(input.startDate);
-  const tsClose = startOfDayUnix(dayAfterEnd);
-  const evmBlockStart = await resolveEvmBlockForStatementBookend(input, apiKey, tsStart);
-  const evmBlockClose = await resolveEvmBlockForStatementBookend(input, apiKey, tsClose);
-
+  /**
+   * Bookends: Subscan `balance_history` daily rows (total GLMR: liquid + staked, per Subscan).
+   * We do not use EVM `eth_getBalance` here — on Moonbeam it reflects **reducible** balance only,
+   * not the same “total in wallet” as Subscan’s balance history / account total.
+   */
   let beginningBalance: number;
   let endingBalance: number;
-  let bookendSource: "evm" | "subscan" | "subscan+current" | "reconciled" = "subscan";
-
-  const evmBlocksDegenerate =
-    evmBlockStart != null &&
-    evmBlockClose != null &&
-    evmBlockStart === evmBlockClose &&
-    input.startDate < dayAfterEnd;
+  let bookendSource: "subscan" | "subscan+current" | "reconciled" = "subscan";
 
   if (
     input.network === "Moonbeam" &&
@@ -416,43 +422,6 @@ export async function getLiveStatementFromSubscan(
     beginningBalance = begParsedExact;
     endingBalance = endParsedExact;
     bookendSource = "subscan";
-  } else if (input.network === "Moonbeam" && evmBlocksDegenerate && evmBlockStart != null) {
-    const one = await tryMoonbeamGlmrAtEvmBlockRpc(input, evmBlockStart);
-    if (one != null) {
-      beginningBalance = one;
-      endingBalance = one;
-      bookendSource = "evm";
-    } else {
-      beginningBalance = subscanBeginning;
-      endingBalance = subscanEnding;
-      bookendSource = useCurrentEndFallback && !endBalanceRaw ? "subscan+current" : "subscan";
-    }
-  } else if (
-    input.network === "Moonbeam" &&
-    evmBlockStart != null &&
-    evmBlockClose != null &&
-    !evmBlocksDegenerate
-  ) {
-    const [evmA, evmB] = await Promise.all([
-      tryMoonbeamGlmrAtEvmBlockRpc(input, evmBlockStart),
-      tryMoonbeamGlmrAtEvmBlockRpc(input, evmBlockClose),
-    ]);
-    const bothRpcOk = evmA != null && evmB != null;
-    const bothMatchCurrent =
-      bothRpcOk &&
-      periodEnded &&
-      nearCurrent(evmA as number) &&
-      nearCurrent(evmB as number);
-    const useEvm = bothRpcOk && (!bothMatchCurrent || looseSubscanAllZero);
-    if (useEvm) {
-      beginningBalance = evmA as number;
-      endingBalance = evmB as number;
-      bookendSource = "evm";
-    } else {
-      beginningBalance = subscanBeginning;
-      endingBalance = subscanEnding;
-      bookendSource = useCurrentEndFallback && !endBalanceRaw ? "subscan+current" : "subscan";
-    }
   } else {
     beginningBalance = subscanBeginning;
     endingBalance = subscanEnding;
@@ -475,8 +444,8 @@ export async function getLiveStatementFromSubscan(
       nearCurrent(beginningBalance)
     ) {
       bookendSource = "reconciled";
-      beginningBalance = currentGlmr - netFromLines;
-      endingBalance = currentGlmr;
+      beginningBalance = currentGlmrTotal - netFromLines;
+      endingBalance = currentGlmrTotal;
     }
   }
 
@@ -510,10 +479,8 @@ export async function getLiveStatementFromSubscan(
         ? `EVM block window (txlist/tokentx): ${evmBlockWindow.from}–${evmBlockWindow.to} (getblocknobytime).`
         : "Could not resolve an EVM block range; Etherscan-style lists use unbounded paging.",
       bookendSource === "reconciled"
-        ? `Beginning/ending: Subscan daily rows looked like the live current GLMR (stale history). We matched the statement to your line items: for a period that ends before today, ending = loose pick for begin + net GLMR from lines; if the through-date includes today, ending = current on-chain GLMR and beginning = current minus that net. True historical bookends may need an archival RPC (set MOONBEAM_RPC_URL).`
-        : bookendSource === "evm"
-          ? `Beginning/ending: eth_getBalance (tries several public Moonbeam RPCs) at EVM blocks ${evmBlockStart} and ${evmBlockClose}.`
-          : "Beginning/ending: Subscan balance_history daily rows where available, or current end for an in-progress through-date.",
+        ? `Beginning/ending: Subscan daily rows matched the current total GLMR (stale/duplicate). We align to your line items; for a period that ends before today, ending = begin anchor + net GLMR from lines; for a through-date through today, ending = today’s total from Subscan and beginning = that minus net.`
+        : "Beginning/ending: Subscan /api/scan/account/balance_history (total GLMR per Subscan, including staked) — not EVM eth_getBalance. “Current end” for an in-progress through-date uses today’s history row or a [today, today] history fetch.",
       sortedHistory.length
         ? `Balance snapshots returned from ${sortedHistory[0].date} to ${sortedHistory[sortedHistory.length - 1].date}.`
         : "No balance history snapshots were returned for this wallet and period.",

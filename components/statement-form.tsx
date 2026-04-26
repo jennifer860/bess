@@ -1,5 +1,6 @@
 "use client";
 
+import { MOONBEAM_EARLIEST_STATEMENT_DATE } from "@/lib/chain-constants";
 import type { StatementInput } from "@/types/statement";
 
 type StatementFormProps = {
@@ -60,6 +61,7 @@ export function StatementForm({ value, isLoading, onChange, onGenerate }: Statem
             type="date"
             className="rounded-lg border border-bess-ink/20 px-3 py-2 text-bess-ink"
             value={value.startDate}
+            min={value.network === "Moonbeam" ? MOONBEAM_EARLIEST_STATEMENT_DATE : undefined}
             onChange={(event) => onChange({ ...value, startDate: event.target.value })}
           />
         </label>
@@ -70,6 +72,7 @@ export function StatementForm({ value, isLoading, onChange, onGenerate }: Statem
             type="date"
             className="rounded-lg border border-bess-ink/20 px-3 py-2 text-bess-ink"
             value={value.endDate}
+            min={value.network === "Moonbeam" ? MOONBEAM_EARLIEST_STATEMENT_DATE : undefined}
             onChange={(event) => onChange({ ...value, endDate: event.target.value })}
           />
         </label>
