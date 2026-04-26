@@ -108,7 +108,7 @@ export default function Home() {
           </div>
         </header>
 
-        <div className="grid gap-6 lg:grid-cols-[minmax(0,40rem)_minmax(0,1fr)]">
+        <div className="grid gap-6 lg:grid-cols-[minmax(0,28rem)_minmax(0,1fr)]">
           <div className="min-w-0 space-y-4">
             <StatementForm value={input} isLoading={isLoading} onChange={setInput} onGenerate={handleGeneratePreview} />
 
@@ -119,7 +119,7 @@ export default function Home() {
             ) : null}
           </div>
 
-          <div className="min-w-0 w-full max-w-4xl justify-self-stretch lg:justify-self-end">
+          <div className="min-w-0 w-full">
             <StatementPreview statement={statement} isLoading={isLoading} />
           </div>
         </div>
