@@ -595,11 +595,55 @@ function rewardRowDedupeKey(r: V2RewardSlash) {
   return `${r.block_timestamp}\0${r.amount}`;
 }
 
+type RewardSlashListApi = "v2" | "v1";
+
+function rewardSlashListPath(api: RewardSlashListApi) {
+  return api === "v2" ? "/api/v2/scan/account/reward_slash" : "/api/scan/account/reward_slash";
+}
+
+/**
+ * Paged v1/v2 `reward_slash` with `block_range` and `order: asc` (shared shape for `list` + timestamps).
+ * Some Moonbeam H160 / EVM views return **v2: []** while v1 is populated; callers must try both.
+ */
+async function fetchRewardSlashPagedInBlockRange(
+  api: RewardSlashListApi,
+  input: StatementInput,
+  apiKey: string,
+  range: StatementBlockWindow,
+  extraBody: Record<string, unknown> = REWARD_SLASH_BODY,
+): Promise<V2RewardSlash[]> {
+  const path = rewardSlashListPath(api);
+  const param = `${range.from}-${range.to}`;
+  const all: V2RewardSlash[] = [];
+  for (let page = 0; page < V2_MAX_PAGES_IN_RANGE; page += 1) {
+    const raw = await callSubscanPost<Record<string, unknown> | null>(input.network, apiKey, path, {
+      address: input.walletAddress,
+      row: V2_ROW,
+      page,
+      order: "asc",
+      block_range: param,
+      ...extraBody,
+    });
+    const data = raw && typeof raw === "object" ? raw : {};
+    const list = data.list;
+    const rows = Array.isArray(list) ? (list as V2RewardSlash[]) : [];
+    if (!rows.length) {
+      break;
+    }
+    all.push(...rows);
+    if (rows.length < V2_ROW) {
+      break;
+    }
+  }
+  return all;
+}
+
 /**
  * If a single `block_range` returns no reward rows, try smaller substrate windows (Subscan
- * sometimes returns an empty `list` for a wide H160+staking range that succeeds per chunk.
+ * sometimes returns an empty `list` for a wide H160+staking range that succeeds per chunk).
  */
-async function fetchV2RewardSlashChunkedInBlockRange(
+async function fetchRewardSlashChunkedInBlockRange(
+  api: RewardSlashListApi,
   input: StatementInput,
   apiKey: string,
   substrateBlockWindow: StatementBlockWindow,
@@ -610,14 +654,7 @@ async function fetchV2RewardSlashChunkedInBlockRange(
   }
   const merged = new Map<string, V2RewardSlash>();
   for (const range of chunks) {
-    const rows = await fetchV2PagedInBlockRange<V2RewardSlash>(
-      input,
-      apiKey,
-      "/api/v2/scan/account/reward_slash",
-      "list",
-      range,
-      REWARD_SLASH_BODY,
-    );
+    const rows = await fetchRewardSlashPagedInBlockRange(api, input, apiKey, range, REWARD_SLASH_BODY);
     for (const r of rows) {
       merged.set(rewardRowDedupeKey(r), r);
     }
@@ -723,23 +760,16 @@ export async function fetchV2RewardSlash(
   blockWindow: StatementBlockWindow | null = null,
 ) {
   if (blockWindow) {
-    return fetchV2PagedInBlockRange<V2RewardSlash>(
-      input,
-      apiKey,
-      "/api/v2/scan/account/reward_slash",
-      "list",
-      blockWindow,
-      REWARD_SLASH_BODY,
-    );
+    return fetchRewardSlashPagedInBlockRange("v2", input, apiKey, blockWindow, REWARD_SLASH_BODY);
   }
   return fetchV2PagedNewestFirst<V2RewardSlash>(input, apiKey, "/api/v2/scan/account/reward_slash", "list", REWARD_SLASH_BODY);
 }
 
 /**
- * Staking rewards in `[startUnix, endUnix]`. (1) v2 + `block_range` when known, (2) same URL with
- * split `block_range` chunks if the wide list is empty, (3) v2 global paging with a guarded
- * early stop (see `fetchRewardSlashV2UnboundedPages`) and page cap, (4) v1 fallback with the
- * same rules.
+ * Staking rewards in `[startUnix, endUnix]`. (1) v2 + `block_range` when known, (2) v2 + chunked
+ * `block_range` if a wide v2 list is empty, (3) v1 + `block_range` and chunked (Moonbeam H160: v2
+ * often returns [] while v1 is populated for the same blocks), (4) v2 then v1 global paging
+ * with a guarded early stop and page cap.
  */
 export async function fetchV2RewardSlashForStatementPeriod(
   input: StatementInput,
@@ -754,48 +784,38 @@ export async function fetchV2RewardSlashForStatementPeriod(
   };
 
   const normalized: StatementInput = { ...input, walletAddress: input.walletAddress.trim() };
+  const forReward = { ...normalized, walletAddress: normalized.walletAddress.toLowerCase() };
 
   if (substrateBlockWindow) {
-    const byBlock = await fetchV2PagedInBlockRange<V2RewardSlash>(
-      { ...normalized, walletAddress: normalized.walletAddress.toLowerCase() },
-      apiKey,
-      "/api/v2/scan/account/reward_slash",
-      "list",
-      substrateBlockWindow,
-      REWARD_SLASH_BODY,
-    );
-    const filtered = byBlock.filter(inWindow);
-    if (filtered.length > 0) {
-      return filtered;
+    const byBlockV2 = await fetchRewardSlashPagedInBlockRange("v2", forReward, apiKey, substrateBlockWindow, REWARD_SLASH_BODY);
+    const filteredV2 = byBlockV2.filter(inWindow);
+    if (filteredV2.length > 0) {
+      return filteredV2;
     }
-    const chunked = await fetchV2RewardSlashChunkedInBlockRange(
-      { ...normalized, walletAddress: normalized.walletAddress.toLowerCase() },
-      apiKey,
-      substrateBlockWindow,
-    );
-    const filteredChunked = chunked.filter(inWindow);
-    if (filteredChunked.length > 0) {
-      return filteredChunked;
+    const chunkedV2 = await fetchRewardSlashChunkedInBlockRange("v2", forReward, apiKey, substrateBlockWindow);
+    const filteredChunkedV2 = chunkedV2.filter(inWindow);
+    if (filteredChunkedV2.length > 0) {
+      return filteredChunkedV2;
+    }
+    const byBlockV1 = await fetchRewardSlashPagedInBlockRange("v1", forReward, apiKey, substrateBlockWindow, REWARD_SLASH_BODY);
+    const filteredV1 = byBlockV1.filter(inWindow);
+    if (filteredV1.length > 0) {
+      return filteredV1;
+    }
+    const chunkedV1 = await fetchRewardSlashChunkedInBlockRange("v1", forReward, apiKey, substrateBlockWindow);
+    const filteredChunkedV1 = chunkedV1.filter(inWindow);
+    if (filteredChunkedV1.length > 0) {
+      return filteredChunkedV1;
     }
   }
 
-  const v2 = await fetchRewardSlashV2UnboundedPages(
-    { ...normalized, walletAddress: normalized.walletAddress.toLowerCase() },
-    apiKey,
-    startUnix,
-    endUnix,
-  );
+  const v2 = await fetchRewardSlashV2UnboundedPages(forReward, apiKey, startUnix, endUnix);
   if (v2.length > 0) {
     return v2;
   }
 
   try {
-    return await fetchRewardSlashV1UnboundedPages(
-      { ...normalized, walletAddress: normalized.walletAddress.toLowerCase() },
-      apiKey,
-      startUnix,
-      endUnix,
-    );
+    return await fetchRewardSlashV1UnboundedPages(forReward, apiKey, startUnix, endUnix);
   } catch {
     return [];
   }
