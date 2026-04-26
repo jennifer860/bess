@@ -310,6 +310,15 @@ async function substrateBlockNumberAtUnix(
   return null;
 }
 
+/** Exact substrate block number at/just before `unixSeconds` via Subscan `/api/scan/block`. */
+export async function resolveSubstrateBlockForStatementBookend(
+  input: StatementInput,
+  apiKey: string,
+  unixSeconds: number,
+): Promise<number | null> {
+  return substrateBlockNumberAtUnix(input.network, apiKey, unixSeconds);
+}
+
 /**
  * Etherscan `getblocknobytime` for Moonbeam/Subscan can expect **timestamp in milliseconds**; passing
  * seconds is read as 1970-era time and returns a very low EVM block (e.g. ~10), and `balance&tag=0xa`

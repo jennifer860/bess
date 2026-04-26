@@ -1,4 +1,5 @@
 import { toUnixSecondsForChain } from "@/lib/chain-timestamp";
+import { getMoonbeamSystemAccountTotalsAtSubstrateBlock } from "@/lib/moonbeam-substrate-rpc";
 import { buildStatementSummary } from "@/lib/statement-calculations";
 import {
   fetchBalanceHistory,
@@ -9,6 +10,7 @@ import {
   fetchV2Extrinsics,
   fetchV2RewardSlashForStatementPeriod,
   fetchV2Transfers,
+  resolveSubstrateBlockForStatementBookend,
   resolveEvmBlockWindow,
   resolveSubstrateBlockWindow,
 } from "@/lib/subscan-client";
@@ -132,10 +134,10 @@ function parseSubscanHistoryBalanceGlmr(raw: string | undefined) {
 }
 
 /**
- * A range `balance_history` call may still be wrong for specific days. We re-fetch the **two**
- * dates that drive exact bookends only (`startDate` and `dayAfterEnd`, i.e. end-of-period snapshot)
- * in narrow `[d,d]` calls, overriding the wide response. (Fewer extra Subscan calls than refetching
- * four days; still keeps Subscan under rate when combined with other endpoints.)
+ * Re-fetch the two bookend days in narrow `[d,d]` calls. **Beginning** = balance **at end of the
+ * calendar day before the start date** (entering the period), i.e. `startDate - 1 day`. **End** =
+ * first instant after the last day → Subscan key `endDate + 1 day` (common convention for
+ * "through 2/28" = EOD 2/28, row dated 3/1).
  */
 async function enrichBookendHistoryIfNeeded(
   input: StatementInput,
@@ -144,9 +146,10 @@ async function enrichBookendHistoryIfNeeded(
   startDate: string,
   endDate: string,
 ) {
+  const dayBeforeStart = addCalendarDaysUtc(startDate, -1);
   const dayAfterEnd = addCalendarDaysUtc(endDate, 1);
   const critical = Array.from(
-    new Set([startDate, dayAfterEnd].map((d) => normalizeSubscanYmdDate(d))),
+    new Set([dayBeforeStart, dayAfterEnd].map((d) => normalizeSubscanYmdDate(d))),
   );
   const by = new Map(history.map((r) => [r.date, r]));
   const extra = await Promise.all(
@@ -181,6 +184,75 @@ type DayAccumulator = {
   fees: number;
   txCount: number;
 };
+
+function daysBetweenUtc(startDate: string, endDate: string) {
+  const a = Date.parse(`${startDate}T00:00:00Z`);
+  const b = Date.parse(`${endDate}T00:00:00Z`);
+  return Math.floor((b - a) / 86_400_000);
+}
+
+/**
+ * Recompute native GLMR net movement for an arbitrary calendar window, using the same Subscan
+ * sources/categories as statement lines (incoming/outgoing transfers, reward_slash rewards, fees).
+ */
+async function computeNativeGlmrNetForWindow(
+  input: StatementInput,
+  apiKey: string,
+  startDate: string,
+  endDate: string,
+) {
+  const scopedInput: StatementInput = { ...input, startDate, endDate };
+  const startUnix = startOfDayUnix(startDate);
+  const endUnix = endOfDayUnix(endDate);
+  const substrateBlockWindow = await resolveSubstrateBlockWindow(scopedInput, apiKey);
+  const [transfers, rewards, extrinsics] = await Promise.all([
+    fetchV2Transfers(scopedInput, apiKey, substrateBlockWindow),
+    fetchV2RewardSlashForStatementPeriod(scopedInput, apiKey, startUnix, endUnix, substrateBlockWindow),
+    fetchV2Extrinsics(scopedInput, apiKey, substrateBlockWindow),
+  ]);
+
+  const wallet = input.walletAddress.toLowerCase();
+  let incomingWei = 0;
+  let outgoingWei = 0;
+  let feesWei = 0;
+  let rewardsWei = BigInt(0);
+
+  for (const transfer of transfers) {
+    const ts = toUnixSecondsForChain(transfer.block_timestamp);
+    if (!isInRange(ts, startUnix, endUnix)) continue;
+    if (transfer.success === false) continue;
+    const amountWei = Number(transfer.amount_v2 ?? transfer.amount ?? "0");
+    const from = (transfer.from ?? "").toLowerCase();
+    const to = (transfer.to ?? "").toLowerCase();
+    const fromEvm = (transfer.from_account_display?.evm_address ?? "").toLowerCase();
+    const toEvm = (transfer.to_account_display?.evm_address ?? "").toLowerCase();
+    const userIsRecipient = to === wallet || toEvm === wallet;
+    const userIsSender = from === wallet || fromEvm === wallet;
+    if (!userIsRecipient && !userIsSender) continue;
+    if (userIsRecipient && amountWei > 0) incomingWei += amountWei;
+    if (userIsSender && amountWei > 0) outgoingWei += amountWei;
+  }
+
+  for (const reward of rewards) {
+    const ts = toUnixSecondsForChain(reward.block_timestamp);
+    if (!isInRange(ts, startUnix, endUnix)) continue;
+    rewardsWei += parseRewardWeiString(reward.amount);
+  }
+
+  for (const ext of extrinsics) {
+    const ts = toUnixSecondsForChain(ext.block_timestamp);
+    if (!isInRange(ts, startUnix, endUnix)) continue;
+    if (ext.success === false) continue;
+    feesWei += Number(ext.fee_used ?? ext.fee ?? "0");
+  }
+
+  return (
+    weiToTokenAmount(incomingWei) +
+    weiBigIntToGlmr(rewardsWei) -
+    weiToTokenAmount(outgoingWei) -
+    weiToTokenAmount(feesWei)
+  );
+}
 
 export async function getLiveStatementFromSubscan(
   input: StatementInput,
@@ -410,9 +482,12 @@ export async function getLiveStatementFromSubscan(
   for (const [date, count] of transferCountByDate) addCountOnlyCategory(date, "Transfers", count);
 
   const sortedHistory = [...balanceHistory].sort((a, b) => a.date.localeCompare(b.date));
+  const dayBeforeStart = addCalendarDaysUtc(input.startDate, -1);
   const dayAfterEnd = addCalendarDaysUtc(input.endDate, 1);
   const todayUtc = new Date().toISOString().slice(0, 10);
   const useCurrentEndFallback = input.endDate >= todayUtc;
+  const tsPeriodOpen = startOfDayUnix(input.startDate);
+  const tsPeriodClose = startOfDayUnix(dayAfterEnd);
 
   /** Subscan `balance_history` = total GLMR (free + staked, etc.); not the EVM `eth_getBalance` “reducible” amount. */
   let currentGlmrTotal = weiToTokenAmount(currentBalanceWei);
@@ -434,6 +509,7 @@ export async function getLiveStatementFromSubscan(
   }
 
   const startBalanceRaw =
+    findBalanceForDate(sortedHistory, dayBeforeStart) ??
     findBalanceForDate(sortedHistory, input.startDate) ??
     sortedHistory.find((row) => row.date >= input.startDate)?.balance ??
     sortedHistory[0]?.balance;
@@ -455,7 +531,7 @@ export async function getLiveStatementFromSubscan(
   const periodEnded = input.endDate < todayUtc;
   const nearCurrent = (n: number) => Math.abs(n - currentGlmrTotal) < 0.0001;
 
-  const startRowForBookend = findBalanceForDate(sortedHistory, input.startDate);
+  const startRowForBookend = findBalanceForDate(sortedHistory, dayBeforeStart);
   const endRowForBookend =
     findBalanceForDate(sortedHistory, dayAfterEnd) ?? findBalanceForDate(sortedHistory, input.endDate);
   const hasSubscanDateRows = startRowForBookend != null && endRowForBookend != null;
@@ -475,6 +551,27 @@ export async function getLiveStatementFromSubscan(
     nearCurrent(begParsedExact) &&
     Math.abs(netFromLines) > 1e-8;
 
+  let chainBeginning: number | null = null;
+  let chainEnding: number | null = null;
+  if (input.network === "Moonbeam") {
+    try {
+      const [blkBegin, blkEnd] = await Promise.all([
+        resolveSubstrateBlockForStatementBookend(input, apiKey, tsPeriodOpen),
+        resolveSubstrateBlockForStatementBookend(input, apiKey, tsPeriodClose),
+      ]);
+      if (blkBegin != null && blkEnd != null) {
+        const [accBegin, accEnd] = await Promise.all([
+          getMoonbeamSystemAccountTotalsAtSubstrateBlock(input.walletAddress, blkBegin),
+          getMoonbeamSystemAccountTotalsAtSubstrateBlock(input.walletAddress, blkEnd),
+        ]);
+        chainBeginning = accBegin?.total ?? null;
+        chainEnding = accEnd?.total ?? null;
+      }
+    } catch {
+      /* substrate RPC fallback failed; keep Subscan path */
+    }
+  }
+
   /**
    * Bookends: Subscan `balance_history` daily rows (total GLMR: liquid + staked, per Subscan).
    * We do not use EVM `eth_getBalance` here — on Moonbeam it reflects **reducible** balance only,
@@ -482,9 +579,13 @@ export async function getLiveStatementFromSubscan(
    */
   let beginningBalance: number;
   let endingBalance: number;
-  let bookendSource: "subscan" | "subscan+current" | "reconciled" = "subscan";
+  let bookendSource: "chain" | "subscan" | "subscan+current" | "reconciled" = "subscan";
 
-  if (
+  if (chainBeginning != null && chainEnding != null && Number.isFinite(chainBeginning) && Number.isFinite(chainEnding)) {
+    beginningBalance = chainBeginning;
+    endingBalance = chainEnding;
+    bookendSource = "chain";
+  } else if (
     input.network === "Moonbeam" &&
     hasSubscanDateRows &&
     !staleSubscanDaily &&
@@ -532,6 +633,52 @@ export async function getLiveStatementFromSubscan(
     endingBalance = netFromLines;
   }
 
+  if (
+    input.network === "Moonbeam" &&
+    periodEnded &&
+    Math.abs(beginningBalance) < 1e-12
+  ) {
+    let anchorCandidates = sortedHistory
+      .filter((r) => r.date >= dayAfterEnd)
+      .sort((a, b) => a.date.localeCompare(b.date));
+
+    if (anchorCandidates.length === 0) {
+      try {
+        const futureRowsRaw = await fetchBalanceHistory(input, apiKey, { start: dayAfterEnd, end: todayUtc });
+        anchorCandidates = futureRowsRaw
+          .map((r) => ({
+            date: normalizeSubscanYmdDate(r.date),
+            balance: r.balance,
+            block: r.block,
+          }))
+          .sort((a, b) => a.date.localeCompare(b.date));
+      } catch {
+        /* keep current fallback if future-range fetch fails */
+      }
+    }
+
+    const anchor = anchorCandidates.find((r) => parseSubscanHistoryBalanceGlmr(r.balance) > 1e-12);
+    if (anchor) {
+      const bridgeDays = daysBetweenUtc(input.startDate, anchor.date);
+      if (bridgeDays >= 0 && bridgeDays <= 800) {
+        try {
+          const anchorBalance = parseSubscanHistoryBalanceGlmr(anchor.balance);
+          const netStartToAnchor = await computeNativeGlmrNetForWindow(
+            input,
+            apiKey,
+            input.startDate,
+            anchor.date,
+          );
+          beginningBalance = anchorBalance - netStartToAnchor;
+          endingBalance = beginningBalance + netFromLines;
+          bookendSource = "reconciled";
+        } catch {
+          /* keep existing fallback if bridge fetch fails */
+        }
+      }
+    }
+  }
+
   const summary = buildStatementSummary(beginningBalance, detailLines);
   summary.endingBalance = endingBalance;
   summary.accountingCheckPassed =
@@ -563,7 +710,9 @@ export async function getLiveStatementFromSubscan(
         : "Could not resolve an EVM block range; Etherscan-style lists use unbounded paging.",
       bookendSource === "reconciled"
         ? `Beginning/ending: reconciled to line items — Subscan was stale, duplicate with current, or bookends were still zero after range + one-day fetches. When both stayed at zero, ending = net GLMR from the statement categories and beginning = 0.`
-        : "Beginning/ending: Subscan /api/scan/account/balance_history (wide range + one-day override for the four bookend dates). “Current end” for a through-date through today may use a [today, today] history fetch.",
+        : bookendSource === "chain"
+          ? "Beginning/ending: Moonbeam substrate `system.account` at block-hash bookends using half-open periods [start, end+1). Beginning is startDate 00:00 UTC; ending is first instant after endDate (end+1 00:00 UTC), so adjacent months are continuous (prev end = next begin). Total = free + reserved."
+          : "Beginning/ending: Subscan balance_history. Beginning = EOD **before** the start date (row “start−1 day”); ending = EOD of the end date (row the **day after** the end date, same as closing instant). “Current end” for a through-date may use a [today, today] fetch.",
       sortedHistory.length
         ? `Balance snapshots returned from ${sortedHistory[0].date} to ${sortedHistory[sortedHistory.length - 1].date}.`
         : "No balance history snapshots were returned for this wallet and period.",
