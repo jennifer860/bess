@@ -1,3 +1,4 @@
+import { toUnixSecondsForChain } from "@/lib/chain-timestamp";
 import { buildStatementSummary } from "@/lib/statement-calculations";
 import {
   fetchBalanceHistory,
@@ -78,7 +79,7 @@ export async function getLiveStatementFromSubscan(
   const detailLines: StatementLine[] = [];
 
   for (const transfer of transfers) {
-    const timestamp = Number(transfer.block_timestamp);
+    const timestamp = toUnixSecondsForChain(transfer.block_timestamp);
     if (!isInRange(timestamp, startUnix, endUnix)) continue;
     if (transfer.success === false) continue;
 
@@ -95,7 +96,7 @@ export async function getLiveStatementFromSubscan(
   }
 
   for (const ext of extrinsics) {
-    const timestamp = Number(ext.block_timestamp);
+    const timestamp = toUnixSecondsForChain(ext.block_timestamp);
     if (!isInRange(timestamp, startUnix, endUnix)) continue;
     if (ext.success === false) continue;
 
@@ -137,11 +138,11 @@ export async function getLiveStatementFromSubscan(
   }
 
   const rewardsInPeriod = rewards.filter((reward) =>
-    isInRange(Number(reward.block_timestamp), startUnix, endUnix),
+    isInRange(toUnixSecondsForChain(reward.block_timestamp), startUnix, endUnix),
   );
   const rewardByDate = new Map<string, number>();
   for (const reward of rewardsInPeriod) {
-    const date = toIsoDate(Number(reward.block_timestamp));
+    const date = toIsoDate(toUnixSecondsForChain(reward.block_timestamp));
     rewardByDate.set(date, (rewardByDate.get(date) ?? 0) + Number(reward.amount || "0"));
   }
   for (const [date, amount] of [...rewardByDate.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
@@ -150,7 +151,9 @@ export async function getLiveStatementFromSubscan(
       category: "Reward Income",
       amount: weiToTokenAmount(amount),
       direction: "in",
-      txCount: rewardsInPeriod.filter((row) => toIsoDate(Number(row.block_timestamp)) === date).length,
+      txCount: rewardsInPeriod.filter(
+        (row) => toIsoDate(toUnixSecondsForChain(row.block_timestamp)) === date,
+      ).length,
     });
   }
 
@@ -173,7 +176,7 @@ export async function getLiveStatementFromSubscan(
 
   const evmTxByDate = new Map<string, number>();
   for (const tx of evmTxs) {
-    const ts = Number(tx.timeStamp);
+    const ts = toUnixSecondsForChain(tx.timeStamp);
     if (!isInRange(ts, startUnix, endUnix)) continue;
     const date = toIsoDate(ts);
     evmTxByDate.set(date, (evmTxByDate.get(date) ?? 0) + 1);
@@ -182,7 +185,7 @@ export async function getLiveStatementFromSubscan(
 
   const erc20ByDate = new Map<string, { count: number; amount: number }>();
   for (const tx of erc20Txs) {
-    const ts = Number(tx.timeStamp);
+    const ts = toUnixSecondsForChain(tx.timeStamp);
     if (!isInRange(ts, startUnix, endUnix)) continue;
     const date = toIsoDate(ts);
     const row = erc20ByDate.get(date) ?? { count: 0, amount: 0 };
@@ -203,7 +206,7 @@ export async function getLiveStatementFromSubscan(
 
   const nftByDate = new Map<string, number>();
   for (const tx of nftTxs) {
-    const ts = Number(tx.timeStamp);
+    const ts = toUnixSecondsForChain(tx.timeStamp);
     if (!isInRange(ts, startUnix, endUnix)) continue;
     const date = toIsoDate(ts);
     nftByDate.set(date, (nftByDate.get(date) ?? 0) + 1);
@@ -214,7 +217,7 @@ export async function getLiveStatementFromSubscan(
 
   const extrinsicByDate = new Map<string, { proxy: number; other: number }>();
   for (const ext of extrinsics) {
-    const ts = Number(ext.block_timestamp);
+    const ts = toUnixSecondsForChain(ext.block_timestamp);
     if (!isInRange(ts, startUnix, endUnix)) continue;
     if (ext.success === false) continue;
     const date = toIsoDate(ts);
@@ -230,7 +233,7 @@ export async function getLiveStatementFromSubscan(
 
   const transferCountByDate = new Map<string, number>();
   for (const transfer of transfers) {
-    const ts = Number(transfer.block_timestamp);
+    const ts = toUnixSecondsForChain(transfer.block_timestamp);
     if (!isInRange(ts, startUnix, endUnix)) continue;
     const date = toIsoDate(ts);
     transferCountByDate.set(date, (transferCountByDate.get(date) ?? 0) + 1);
@@ -267,6 +270,7 @@ export async function getLiveStatementFromSubscan(
     ),
     notes: [
       "Live data source: Subscan balance history + transfers + reward/slash + extrinsics + EVM activity.",
+      "Transfer/reward/extrinsic/EVM lists are fetched newest-first until before the statement start date (avoids missing a recent period when older than the first page of asc-ordered results).",
       "Beginning/ending balances are taken from Subscan balance history snapshots for the selected dates.",
       sortedHistory.length
         ? `Balance snapshots returned from ${sortedHistory[0].date} to ${sortedHistory[sortedHistory.length - 1].date}.`
