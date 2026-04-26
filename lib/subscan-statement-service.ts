@@ -35,6 +35,11 @@ export async function getLiveStatementFromSubscan(
     throw new Error("Live mode currently supports Moonbeam first. Keep using mock mode for other networks.");
   }
 
+  // The Etherscan-like endpoints require an EVM-format address.
+  if (!/^0x[a-fA-F0-9]{40}$/.test(input.walletAddress.trim())) {
+    throw new Error("Live Moonbeam mode requires a valid 0x EVM wallet address (42 characters).");
+  }
+
   const [currentBalanceWei, transactions] = await Promise.all([
     fetchCurrentEvmBalanceWei(input, apiKey),
     fetchEvmTxList(input, apiKey),

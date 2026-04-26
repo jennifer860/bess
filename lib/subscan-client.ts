@@ -25,6 +25,19 @@ type EtherscanLikeResponse<T> = {
   result: T;
 };
 
+function parseSubscanErrorDetail(result: unknown): string {
+  if (typeof result === "string" && result.trim().length > 0) {
+    return result;
+  }
+  if (Array.isArray(result)) {
+    return `array(${result.length})`;
+  }
+  if (result && typeof result === "object") {
+    return "structured error payload";
+  }
+  return "no detail";
+}
+
 function getApiHost(network: string) {
   return NETWORK_TO_API_HOST[network] ?? `${network.toLowerCase()}.api.subscan.io`;
 }
@@ -51,11 +64,16 @@ async function callEtherscanLike<T>(
   }
 
   const payload = (await response.json()) as EtherscanLikeResponse<T>;
-  if (payload.status !== "1" && payload.message !== "No transactions found") {
-    throw new Error(`Subscan response error: ${payload.message}`);
+  if (payload.status === "1") {
+    return payload.result;
   }
 
-  return payload.result;
+  if (payload.message === "No transactions found") {
+    return payload.result;
+  }
+
+  const detail = parseSubscanErrorDetail(payload.result);
+  throw new Error(`Subscan response error: ${payload.message}. Detail: ${detail}`);
 }
 
 export async function fetchCurrentEvmBalanceWei(input: StatementInput, apiKey: string) {
