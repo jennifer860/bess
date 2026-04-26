@@ -8,43 +8,15 @@ const NETWORK_TO_HOST: Record<string, string> = {
   Kusama: "kusama.subscan.io",
 };
 
+/** Feb 2025 activity demo: staking-only rewards, total 3,838.77823 GLMR (sum of lines). */
 function getActivityScenarioLines(): StatementLine[] {
   return [
-    {
-      date: "2025-02-03",
-      category: "Incoming Transfers",
-      amount: 1200,
-      direction: "in",
-      txCount: 2,
-    },
-    {
-      date: "2025-02-03",
-      category: "Fees",
-      amount: 2.519882,
-      direction: "out",
-      txCount: 6,
-    },
     {
       date: "2025-02-06",
       category: "Reward Income",
       amount: 733.101223,
       direction: "in",
       txCount: 7,
-    },
-    {
-      date: "2025-02-08",
-      category: "Outgoing Transfers",
-      amount: 580,
-      direction: "out",
-      txCount: 1,
-    },
-    {
-      date: "2025-02-09",
-      category: "EVM Transactions",
-      amount: 0,
-      direction: "out",
-      txCount: 3,
-      notes: "Contract interactions only",
     },
     {
       date: "2025-02-12",
@@ -54,33 +26,11 @@ function getActivityScenarioLines(): StatementLine[] {
       txCount: 8,
     },
     {
-      date: "2025-02-14",
-      category: "Incoming Transfers",
-      amount: 980,
-      direction: "in",
-      txCount: 1,
-    },
-    {
-      date: "2025-02-16",
-      category: "Outgoing Transfers",
-      amount: 1100.87,
-      direction: "out",
-      txCount: 2,
-    },
-    {
       date: "2025-02-20",
       category: "Reward Income",
       amount: 1000.154894,
       direction: "in",
       txCount: 9,
-    },
-    {
-      date: "2025-02-23",
-      category: "Proxy",
-      amount: 0,
-      direction: "out",
-      txCount: 2,
-      notes: "Proxy setup and revoke",
     },
     {
       date: "2025-02-24",
@@ -100,23 +50,6 @@ export function getMockStatementData(
   const detailLines = scenario === "activity" ? getActivityScenarioLines() : [];
   const summary = buildStatementSummary(beginningBalance, detailLines);
 
-  // Force exact demo values requested for the activity scenario.
-  if (scenario === "activity") {
-    summary.rewardIncome = 3838.77823;
-    summary.endingBalance = 577841.711128;
-    summary.totalActivity =
-      summary.incomingTransfers + summary.rewardIncome + summary.outgoingTransfers + summary.fees;
-    summary.accountingCheckPassed =
-      Math.abs(
-        summary.beginningBalance +
-          summary.incomingTransfers +
-          summary.rewardIncome -
-          summary.outgoingTransfers -
-          summary.fees -
-          summary.endingBalance,
-      ) < 0.000001;
-  }
-
   if (scenario === "no-activity") {
     summary.endingBalance = 574002.932899;
     summary.totalActivity = 0;
@@ -132,6 +65,7 @@ export function getMockStatementData(
     detailLines,
     notes: [
       "This statement is generated from mock blockchain data for UI and PDF preview testing.",
+      "Mock mode does not use the start/end date fields; choose Live Subscan to filter by the selected period.",
       "In production, data should be fetched and reconciled from Subscan endpoints.",
       "All amounts are shown in native token units unless otherwise specified.",
     ],

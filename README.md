@@ -4,9 +4,13 @@ Create official-looking PDF crypto account statements from Subscan-style blockch
 
 This first version is intentionally simple and beginner-friendly:
 - Single-page UI
-- Mock statement data (no live Subscan API yet)
+- Mock and live Subscan data modes
 - Statement preview + accounting check
 - Downloadable PDF output
+
+## Project Progress
+
+For an up-to-date implementation log and next steps, see `docs/progress.md`.
 
 ## Getting Started
 
