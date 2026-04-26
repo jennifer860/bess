@@ -72,6 +72,20 @@ function addCalendarDaysUtc(yyyyMmDd: string, deltaDays: number) {
   return new Date(t).toISOString().slice(0, 10);
 }
 
+/** Subscan sometimes returns `2023/2/1` or `2023-02-01T...` which must not miss exact `YYYY-MM-DD` keys. */
+function normalizeSubscanYmdDate(raw: string) {
+  const t = String(raw).trim();
+  const iso = t.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) {
+    return `${iso[1]}-${iso[2]}-${iso[3]}`;
+  }
+  const slash = t.match(/^(\d{4})[\/](\d{1,2})[\/](\d{1,2})/);
+  if (slash) {
+    return `${slash[1]}-${String(slash[2]).padStart(2, "0")}-${String(slash[3]).padStart(2, "0")}`;
+  }
+  return t.slice(0, 10);
+}
+
 function findBalanceForDate(
   history: { date: string; balance: string }[],
   date: string,
@@ -81,14 +95,18 @@ function findBalanceForDate(
 
 /**
  * Subscan `balance_history.balance` = **total** GLMR in the account (per Subscan), usually a **wei**
- * integer string; some responses use a **decimal GLMR** string. Wrongly dividing display GLMR by
- * 1e18 reads as ~0.
+ * integer string; some responses use a **decimal GLMR** string (optionally with **thousand
+ * separators**). `Number("201,418.89")` is NaN — strip commas or we read as 0.
  */
 function parseSubscanHistoryBalanceGlmr(raw: string | undefined) {
   if (raw == null) {
     return 0;
   }
-  const t = String(raw).trim();
+  let t = String(raw).trim();
+  if (t === "") {
+    return 0;
+  }
+  t = t.replace(/,/g, "").replace(/[\s_']/g, "");
   if (t === "") {
     return 0;
   }
@@ -104,6 +122,45 @@ function parseSubscanHistoryBalanceGlmr(raw: string | undefined) {
   } catch {
     return 0;
   }
+}
+
+/**
+ * A single `balance_history` range call sometimes omits days or returns an empty `history` for
+ * some Subscan/keys; one-day requests for the bookend YYYY-MM-DDs usually backfill the gaps.
+ */
+async function enrichBookendHistoryIfNeeded(
+  input: StatementInput,
+  apiKey: string,
+  history: { date: string; balance: string; block?: number }[],
+  startDate: string,
+  endDate: string,
+) {
+  const dayAfterEnd = addCalendarDaysUtc(endDate, 1);
+  const critical = Array.from(
+    new Set(
+      [addCalendarDaysUtc(startDate, -1), startDate, endDate, dayAfterEnd].map((d) =>
+        normalizeSubscanYmdDate(d),
+      ),
+    ),
+  );
+  const by = new Map(history.map((r) => [r.date, r]));
+  const missing = critical.filter((d) => !by.has(d));
+  if (missing.length === 0) {
+    return history;
+  }
+  const extra = await Promise.all(
+    missing.map((d) => fetchBalanceHistory(input, apiKey, { start: d, end: d })),
+  );
+  for (const rows of extra) {
+    for (const r of rows) {
+      const d = normalizeSubscanYmdDate(r.date);
+      if (r.balance == null || String(r.balance).trim() === "") continue;
+      if (!by.has(d) || parseSubscanHistoryBalanceGlmr(by.get(d)!.balance) < 1e-12) {
+        by.set(d, { date: d, balance: r.balance, block: r.block });
+      }
+    }
+  }
+  return [...by.values()].sort((a, b) => a.date.localeCompare(b.date));
 }
 
 function isInRange(unixSeconds: number, startUnix: number, endUnix: number) {
@@ -143,7 +200,7 @@ export async function getLiveStatementFromSubscan(
     resolveEvmBlockWindow(input, apiKey),
   ]);
 
-  const [currentBalanceWei, balanceHistory, transfers, rewards, extrinsics, evmTxs, erc20Txs, nftTxs] =
+  const [currentBalanceWei, balanceHistoryRaw, transfers, rewards, extrinsics, evmTxs, erc20Txs, nftTxs] =
     await Promise.all([
       fetchCurrentEvmBalanceWei(input, apiKey),
       fetchBalanceHistory(input, apiKey, {
@@ -157,6 +214,18 @@ export async function getLiveStatementFromSubscan(
       fetchEvmTokenTransfers(input, apiKey, evmBlockWindow),
       fetchEvmNftTransfers(input, apiKey, evmBlockWindow),
     ]);
+
+  const balanceHistory = await enrichBookendHistoryIfNeeded(
+    input,
+    apiKey,
+    balanceHistoryRaw.map((r) => ({
+      date: normalizeSubscanYmdDate(r.date),
+      balance: r.balance,
+      block: r.block,
+    })),
+    input.startDate,
+    input.endDate,
+  );
 
   const wallet = input.walletAddress.toLowerCase();
 
