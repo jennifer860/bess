@@ -106,8 +106,13 @@ function etherscanListResult<T>(value: T[] | null | undefined): T[] {
   return Array.isArray(value) ? value : [];
 }
 
-/** Space between each Subscan HTTP call (one global queue) to stay under key limits. */
-const SUBSCAN_MIN_GAP_MS = 200;
+/**
+ * Min delay before each Subscan HTTP call (per server instance). Subscan’s plan limit is often
+ * **5 req/s**; 200ms ≈ 5/s with no headroom, and Vercel runs **multiple** concurrent isolates, each
+ * with its own queue — requests from different invocations can interleave and exceed 5/s. Use 400ms
+ * (~2.5/s per instance) so that even two warm instances stay near or under the key limit.
+ */
+const SUBSCAN_MIN_GAP_MS = 400;
 /** Exponential backoff base when Subscan returns HTTP 429 (code 20008). */
 const RATE_LIMIT_BASE_MS = 1_500;
 const RATE_LIMIT_MAX_RETRIES = 6;

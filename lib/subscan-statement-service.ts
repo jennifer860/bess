@@ -132,10 +132,10 @@ function parseSubscanHistoryBalanceGlmr(raw: string | undefined) {
 }
 
 /**
- * A range `balance_history` call often still returns a row for each day, so **all** bookend
- * dates appear “present” and we used to **skip** one-day fetches — leaving wrong or parse-zero
- * balances. We always re-fetch the four bookend instants in narrow `[d,d]` calls and let those
- * results override the wide response for the same YYYY-MM-DD.
+ * A range `balance_history` call may still be wrong for specific days. We re-fetch the **two**
+ * dates that drive exact bookends only (`startDate` and `dayAfterEnd`, i.e. end-of-period snapshot)
+ * in narrow `[d,d]` calls, overriding the wide response. (Fewer extra Subscan calls than refetching
+ * four days; still keeps Subscan under rate when combined with other endpoints.)
  */
 async function enrichBookendHistoryIfNeeded(
   input: StatementInput,
@@ -146,11 +146,7 @@ async function enrichBookendHistoryIfNeeded(
 ) {
   const dayAfterEnd = addCalendarDaysUtc(endDate, 1);
   const critical = Array.from(
-    new Set(
-      [addCalendarDaysUtc(startDate, -1), startDate, endDate, dayAfterEnd].map((d) =>
-        normalizeSubscanYmdDate(d),
-      ),
-    ),
+    new Set([startDate, dayAfterEnd].map((d) => normalizeSubscanYmdDate(d))),
   );
   const by = new Map(history.map((r) => [r.date, r]));
   const extra = await Promise.all(
