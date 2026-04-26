@@ -421,7 +421,7 @@ export async function getLiveStatementFromSubscan(
         ? `EVM block window (txlist/tokentx): ${evmBlockWindow.from}–${evmBlockWindow.to} (getblocknobytime).`
         : "Could not resolve an EVM block range; Etherscan-style lists use unbounded paging.",
       bookendSource === "evm"
-        ? `Beginning/ending balances: Moonbeam public JSON-RPC (${getMoonbeamPublicRpcUrl()}) — largest EVM block with block_time < each bound (00:00 UTC ${input.startDate} and ${dayAfterEnd}), then eth_getBalance at EVM blocks ${evmBlockStart} and ${evmBlockClose}. (Subscan Etherscan balance-at-block can match current GLMR, so it is not used for bookends.)`
+        ? `Beginning/ending: EVM block from Subscan getblocknobytime (or archival RPC if Subscan is empty); GLMR = eth_getBalance on ${getMoonbeamPublicRpcUrl()} at EVM blocks ${evmBlockStart} and ${evmBlockClose}. (Public RPC is pruned: binary EVM time→height search is skipped on missing blocks so we never pick genesis-area heights like ~10.)`
         : "Beginning/ending (fallback when EVM bookends fail): Subscan balance_history. Integer strings = wei; decimal strings = GLMR. For ended periods, current wallet balance is not used as the ending balance. Query window still includes a day before start and a day after end when requesting history.",
       sortedHistory.length
         ? `Balance snapshots returned from ${sortedHistory[0].date} to ${sortedHistory[sortedHistory.length - 1].date}.`

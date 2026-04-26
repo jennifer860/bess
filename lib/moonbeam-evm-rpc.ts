@@ -75,10 +75,21 @@ export async function evmLargestBlockBeforeUnixSecond(rpc: string, targetUnix: n
     return null;
   }
 
+  const minPlausible = targetUnix >= 1_500_000_000 ? 25_000 : 0;
+
   while (lo < hi) {
     const m = Math.floor((lo + hi + 1) / 2);
     const tsm = await ethGetBlockTimestampSecondsFromRpc(rpc, m);
+    /**
+     * **Pruned** nodes often return `null` for `eth_getBlockByNumber` on middle heights. Treating
+     * that as “go lower” was shrinking the search to genesis-area blocks (e.g. 10) and then using
+     * the balance at block 10 — wrong ~10 GLMR bookends. If we can’t read a **recent** `m`, give up
+     * and let the caller use Subscan `getblocknobytime` instead.
+     */
     if (tsm == null) {
+      if (m > 50_000) {
+        return null;
+      }
       hi = m - 1;
       continue;
     }
@@ -87,6 +98,10 @@ export async function evmLargestBlockBeforeUnixSecond(rpc: string, targetUnix: n
     } else {
       hi = m - 1;
     }
+  }
+
+  if (minPlausible > 0 && lo < minPlausible) {
+    return null;
   }
   return lo;
 }

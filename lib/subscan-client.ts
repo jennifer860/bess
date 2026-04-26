@@ -341,24 +341,33 @@ export async function evmBlockNumberAtUnix(
 }
 
 /**
- * Bookend block heights: on Moonbeam we resolve **archival** EVM blocks with public JSON-RPC
- * (largest block whose time &lt; `target` second). Subscan `getblocknobytime` can be inconsistent;
- * the Etherscan balance + blockno path often returns **current** GLMR, not history.
+ * Bookend EVM block height. **Subscan `getblocknobytime` (ms)** is the primary source — it matches
+ * explorer time→height. Public RPC binary search can collapse to ~10 on **pruned** nodes that
+ * return null for `eth_getBlockByNumber` on most heights; we only use RPC when it looks plausible.
  */
 export async function resolveEvmBlockForStatementBookend(
   input: StatementInput,
   apiKey: string,
   unixSeconds: number,
 ): Promise<number | null> {
+  const plausible = (b: number | null) =>
+    b != null && b > 0 && (unixSeconds < 1_500_000_000 || b >= 25_000);
+
   if (input.network === "Moonbeam") {
+    const fromSubscan = await evmBlockNumberAtUnix(input.network, apiKey, unixSeconds);
+    if (plausible(fromSubscan)) {
+      return fromSubscan;
+    }
+
     try {
-      const b = await evmLargestBlockBeforeUnixSecond(getMoonbeamPublicRpcUrl(), unixSeconds);
-      if (b != null && b >= 0) {
-        return b;
+      const fromRpc = await evmLargestBlockBeforeUnixSecond(getMoonbeamPublicRpcUrl(), unixSeconds);
+      if (plausible(fromRpc)) {
+        return fromRpc;
       }
     } catch {
-      /* try Subscan */
+      /* no archival RPC; Subscan was already tried */
     }
+    return null;
   }
   return evmBlockNumberAtUnix(input.network, apiKey, unixSeconds);
 }
