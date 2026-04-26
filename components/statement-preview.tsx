@@ -56,9 +56,9 @@ export function StatementPreview({ statement, isLoading = false }: StatementPrev
                 {statement.walletAddress}
               </dd>
             </div>
-            <div className="flex items-baseline justify-between gap-4">
-              <dt className="shrink-0 text-bess-ink/60">Token</dt>
-              <dd className="text-right text-bess-ink">{statement.tokenSymbol}</dd>
+            <div className="min-w-0">
+              <dt className="text-bess-ink/60">Token</dt>
+              <dd className="mt-1 text-bess-ink">{statement.tokenSymbol}</dd>
             </div>
           </dl>
         </div>
@@ -105,7 +105,7 @@ export function StatementPreview({ statement, isLoading = false }: StatementPrev
         <button
           type="button"
           className="w-full rounded-lg bg-bess-blue px-5 py-3 text-sm font-medium text-white hover:bg-bess-blue/90"
-          onClick={() => downloadStatementPdf(statement)}
+          onClick={() => void downloadStatementPdf(statement)}
         >
           Download Statement PDF
         </button>

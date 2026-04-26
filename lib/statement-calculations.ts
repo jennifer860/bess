@@ -49,6 +49,23 @@ export function formatAmount(value: number, tokenSymbol: string) {
   })} ${tokenSymbol}`;
 }
 
+/** PDF / table-only: same numeric formatting as `formatAmount` without the token suffix. */
+export function formatPdfAmount(value: number) {
+  const minDigits = 6;
+  const maxDigits = 6;
+  if (value < 0) {
+    const abs = Math.abs(value).toLocaleString(undefined, {
+      minimumFractionDigits: minDigits,
+      maximumFractionDigits: maxDigits,
+    });
+    return `(${abs})`;
+  }
+  return value.toLocaleString(undefined, {
+    minimumFractionDigits: minDigits,
+    maximumFractionDigits: maxDigits,
+  });
+}
+
 export function hasNoActivity(statement: StatementData) {
   return statement.detailLines.length === 0;
 }
