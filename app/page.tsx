@@ -20,10 +20,13 @@ const DEFAULT_INPUT: StatementInput = {
 
 export default function Home() {
   const [input, setInput] = useState<StatementInput>(DEFAULT_INPUT);
+  const [source, setSource] = useState<"mock" | "live">("mock");
   const [scenario, setScenario] = useState<"activity" | "no-activity">("activity");
   const [statement, setStatement] = useState<StatementData | null>(
     getMockStatementData(DEFAULT_INPUT, "activity"),
   );
+  const [isLoading, setIsLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   function handleScenarioChange(nextScenario: "activity" | "no-activity") {
     const period = nextScenario === "activity" ? ACTIVITY_PERIOD : NO_ACTIVITY_PERIOD;
@@ -31,8 +34,34 @@ export default function Home() {
     setInput((prev) => ({ ...prev, ...period }));
   }
 
-  function handleGeneratePreview() {
-    setStatement(getMockStatementData(input, scenario));
+  async function handleGeneratePreview() {
+    setErrorMessage(null);
+
+    if (source === "mock") {
+      setStatement(getMockStatementData(input, scenario));
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      const response = await fetch("/api/statement", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      });
+      const payload = (await response.json()) as { statement?: StatementData; error?: string };
+
+      if (!response.ok || !payload.statement) {
+        throw new Error(payload.error ?? "Failed to generate live statement.");
+      }
+
+      setStatement(payload.statement);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unexpected error.";
+      setErrorMessage(message);
+    } finally {
+      setIsLoading(false);
+    }
   }
 
   return (
@@ -61,10 +90,19 @@ export default function Home() {
             <StatementForm
               value={input}
               scenario={scenario}
+              source={source}
+              isLoading={isLoading}
               onChange={setInput}
+              onSourceChange={setSource}
               onScenarioChange={handleScenarioChange}
               onGenerate={handleGeneratePreview}
             />
+
+            {errorMessage ? (
+              <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                {errorMessage}
+              </p>
+            ) : null}
 
             <button
               type="button"
