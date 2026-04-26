@@ -65,24 +65,31 @@ export default function Home() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-100">
+    <div className="min-h-screen bg-bess-mist">
       <main className="mx-auto w-full max-w-6xl px-4 py-8 md:px-8">
-        <header className="mb-8 rounded-2xl bg-slate-900 px-6 py-8 text-white shadow-lg">
-          <div className="inline-flex rounded-lg bg-black/30 p-2">
-            <Image
-              src="/cryptostatements-logo.png"
-              alt="CryptoStatements.xyz logo"
-              width={430}
-              height={80}
-              priority
-              className="h-auto w-[280px] md:w-[360px]"
-            />
+        <header className="mb-8 rounded-2xl border border-bess-ink/10 bg-bess-mist px-6 py-8 text-bess-ink shadow-sm">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
+            <div className="shrink-0 rounded-xl border border-bess-ink/10 bg-white p-3">
+              <Image
+                src="/favicon.png"
+                alt="BESS logo"
+                width={64}
+                height={64}
+                priority
+                className="h-16 w-16"
+              />
+            </div>
+            <div>
+              <h1 className="text-3xl font-bold md:text-4xl">
+                BESS - Blockchain Explorer Simple Statement
+              </h1>
+              <p className="mt-3 max-w-3xl text-sm text-bess-ink/85 md:text-base">
+                Generate professional account statement previews and export bank-style PDFs from
+                Subscan-style data. Use mock data for demos or the live API for a connected wallet
+                and period.
+              </p>
+            </div>
           </div>
-          <h1 className="mt-2 text-3xl font-bold md:text-4xl">Blockchain Account Statement Builder</h1>
-          <p className="mt-3 max-w-3xl text-sm text-slate-200 md:text-base">
-            Generate professional crypto account statement previews and export bank-statement-style PDFs
-            from Subscan-style data. This first version uses mock data only.
-          </p>
         </header>
 
         <div className="grid gap-6 lg:grid-cols-[1fr_1.4fr]">
@@ -106,7 +113,7 @@ export default function Home() {
 
             <button
               type="button"
-              className="w-full rounded-lg bg-emerald-600 px-5 py-3 text-sm font-medium text-white hover:bg-emerald-500"
+              className="w-full rounded-lg bg-bess-blue px-5 py-3 text-sm font-medium text-white hover:bg-bess-blue/90"
               onClick={() => {
                 if (statement) {
                   downloadStatementPdf(statement);

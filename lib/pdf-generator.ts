@@ -24,7 +24,7 @@ export function downloadStatementPdf(statement: StatementData) {
 
   doc.setFont("helvetica", "bold");
   doc.setFontSize(18);
-  doc.text("CryptoStatements.xyz", margin, 54);
+  doc.text("BESS - Blockchain Explorer Simple Statement", margin, 54);
 
   doc.setFont("helvetica", "normal");
   doc.setFontSize(10);
@@ -59,7 +59,7 @@ export function downloadStatementPdf(statement: StatementData) {
       ["Ending Balance", formatAmount(statement.summary.endingBalance, statement.tokenSymbol)],
     ],
     styles: { font: "helvetica", fontSize: 10 },
-    headStyles: { fillColor: [15, 23, 42] },
+    headStyles: { fillColor: [42, 41, 43], textColor: 255 },
     margin: { left: margin, right: margin },
   });
 
@@ -70,7 +70,7 @@ export function downloadStatementPdf(statement: StatementData) {
     head: [["Notes"]],
     body: statement.notes.map((note) => [note]),
     styles: { font: "helvetica", fontSize: 9 },
-    headStyles: { fillColor: [51, 65, 85] },
+    headStyles: { fillColor: [37, 105, 206], textColor: 255 },
     margin: { left: margin, right: margin },
   });
 
@@ -99,7 +99,7 @@ export function downloadStatementPdf(statement: StatementData) {
           line.notes ?? "",
         ]),
         styles: { font: "helvetica", fontSize: 9 },
-        headStyles: { fillColor: [30, 41, 59] },
+        headStyles: { fillColor: [42, 41, 43], textColor: 255 },
         margin: { left: margin, right: margin },
       });
     }

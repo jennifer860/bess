@@ -1,39 +1,39 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { DM_Sans } from "next/font/google";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+const dmSans = DM_Sans({
+  variable: "--font-dm-sans",
   subsets: ["latin"],
+  weight: ["400", "500", "600", "700"],
 });
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
+const siteUrl =
+  typeof process.env.VERCEL_URL === "string" && process.env.VERCEL_URL.length > 0
+    ? `https://${process.env.VERCEL_URL}`
+    : "http://localhost:3000";
 
 export const metadata: Metadata = {
-  title: "CryptoStatements.xyz",
-  description: "Create official-looking PDF crypto account statements.",
-  metadataBase: new URL("https://cryptostatements.xyz"),
+  metadataBase: new URL(siteUrl),
+  title: "BESS - Blockchain Explorer Simple Statement",
+  description: "Build simple account statements from blockchain explorer data. Preview and export PDFs.",
   icons: {
-    icon: "/cryptostatements-logo.png",
-    shortcut: "/cryptostatements-logo.png",
-    apple: "/cryptostatements-logo.png",
+    icon: "/favicon.png",
+    shortcut: "/favicon.png",
+    apple: "/favicon.png",
   },
   openGraph: {
-    title: "CryptoStatements.xyz",
-    description: "Create official-looking PDF crypto account statements.",
-    url: "https://cryptostatements.xyz",
-    siteName: "CryptoStatements.xyz",
-    images: [{ url: "/cryptostatements-logo.png" }],
+    title: "BESS - Blockchain Explorer Simple Statement",
+    description: "Build simple account statements from blockchain explorer data. Preview and export PDFs.",
+    siteName: "BESS",
+    images: [{ url: "/favicon.png" }],
     type: "website",
   },
   twitter: {
-    card: "summary_large_image",
-    title: "CryptoStatements.xyz",
-    description: "Create official-looking PDF crypto account statements.",
-    images: ["/cryptostatements-logo.png"],
+    card: "summary",
+    title: "BESS - Blockchain Explorer Simple Statement",
+    description: "Build simple account statements from blockchain explorer data. Preview and export PDFs.",
+    images: ["/favicon.png"],
   },
 };
 
@@ -43,11 +43,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html
-      lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
-    >
-      <body className="min-h-full flex flex-col">{children}</body>
+    <html lang="en" className={`${dmSans.variable} h-full antialiased`}>
+      <body className="min-h-full flex flex-col font-sans">{children}</body>
     </html>
   );
 }
