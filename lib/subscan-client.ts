@@ -565,8 +565,65 @@ export async function fetchBalanceHistory(
 const V2_ROW = 100;
 const V2_MAX_PAGES_DESC = 100;
 const V2_MAX_PAGES_IN_RANGE = 500;
-/** Paged "download all" style reward fetch — must exceed Subscan’s default list depth (~10k) for long histories. */
-const V2_REWARD_FULL_SCAN_MAX_PAGES = 1000;
+/**
+ * Paged "download all" style reward fetch when v2 is not block-scoped. Capped to avoid
+ * serverless timeouts (Vercel 300s): paging 1000×400ms is already >5 minutes before other work.
+ */
+const V2_REWARD_UNBOUNDED_MAX_PAGES = 200;
+/** Split a wide v2 `block_range` for reward_slash when a single range returns nothing (H160 + API quirks). */
+const REWARD_BLOCK_CHUNK_COUNT = 16;
+
+function splitBlockWindowForRewards(
+  range: StatementBlockWindow,
+  chunkCount: number = REWARD_BLOCK_CHUNK_COUNT,
+): StatementBlockWindow[] {
+  const { from, to } = range;
+  if (!Number.isFinite(from) || !Number.isFinite(to) || to < from) {
+    return [range];
+  }
+  const span = to - from + 1;
+  const n = Math.min(chunkCount, Math.max(1, span));
+  const step = Math.max(1, Math.ceil(span / n));
+  const out: StatementBlockWindow[] = [];
+  for (let a = from; a <= to; a += step) {
+    out.push({ from: a, to: Math.min(to, a + step - 1) });
+  }
+  return out;
+}
+
+function rewardRowDedupeKey(r: V2RewardSlash) {
+  return `${r.block_timestamp}\0${r.amount}`;
+}
+
+/**
+ * If a single `block_range` returns no reward rows, try smaller substrate windows (Subscan
+ * sometimes returns an empty `list` for a wide H160+staking range that succeeds per chunk.
+ */
+async function fetchV2RewardSlashChunkedInBlockRange(
+  input: StatementInput,
+  apiKey: string,
+  substrateBlockWindow: StatementBlockWindow,
+): Promise<V2RewardSlash[]> {
+  const chunks = splitBlockWindowForRewards(substrateBlockWindow, REWARD_BLOCK_CHUNK_COUNT);
+  if (chunks.length <= 1) {
+    return [];
+  }
+  const merged = new Map<string, V2RewardSlash>();
+  for (const range of chunks) {
+    const rows = await fetchV2PagedInBlockRange<V2RewardSlash>(
+      input,
+      apiKey,
+      "/api/v2/scan/account/reward_slash",
+      "list",
+      range,
+      REWARD_SLASH_BODY,
+    );
+    for (const r of rows) {
+      merged.set(rewardRowDedupeKey(r), r);
+    }
+  }
+  return [...merged.values()];
+}
 
 async function fetchV2PagedInBlockRange<T extends { block_timestamp: number }>(
   input: StatementInput,
@@ -679,10 +736,10 @@ export async function fetchV2RewardSlash(
 }
 
 /**
- * Staking rewards in `[startUnix, endUnix]`. (1) v2 + `block_range` when known, (2) v2 paged with
- * **no early exit** until an empty or short page (Subscan pagination order is unreliable; early
- * exits dropped February rows), (3) [v1 reward/slash](https://support.subscan.io/api-4193056) if v2
- * still returns nothing.
+ * Staking rewards in `[startUnix, endUnix]`. (1) v2 + `block_range` when known, (2) same URL with
+ * split `block_range` chunks if the wide list is empty, (3) v2 global paging (newest-first) with
+ * early stop when a page is entirely before the statement start + a page cap, (4) v1 fallback
+ * with the same rules.
  */
 export async function fetchV2RewardSlashForStatementPeriod(
   input: StatementInput,
@@ -711,6 +768,15 @@ export async function fetchV2RewardSlashForStatementPeriod(
     if (filtered.length > 0) {
       return filtered;
     }
+    const chunked = await fetchV2RewardSlashChunkedInBlockRange(
+      { ...normalized, walletAddress: normalized.walletAddress.toLowerCase() },
+      apiKey,
+      substrateBlockWindow,
+    );
+    const filteredChunked = chunked.filter(inWindow);
+    if (filteredChunked.length > 0) {
+      return filteredChunked;
+    }
   }
 
   const v2 = await fetchRewardSlashV2UnboundedPages(
@@ -736,9 +802,11 @@ export async function fetchV2RewardSlashForStatementPeriod(
 }
 
 /**
- * v2: page until empty or short page — no heuristic early exit (heuristics broke Feb 2025 when
- * page-1’s max was still before February while later pages contained the month).
- * See [v2 list](https://support.subscan.io/api-4231209).
+ * v2: newest-first pages (default on reward_slash). We stop after **two** consecutive full
+ * (100-row) pages whose newest reward is still strictly before the statement start — Subscan
+ * order can wobble, so we require two. (Previously we only stopped on a short/empty page, so
+ * active accounts could walk ~1000 full pages and exceed serverless time limits.) Hard page cap
+ * remains as a backstop. See [v2 list](https://support.subscan.io/api-4231209).
  */
 async function fetchRewardSlashV2UnboundedPages(
   input: StatementInput,
@@ -752,12 +820,14 @@ async function fetchRewardSlashV2UnboundedPages(
   }
 
   const collected: V2RewardSlash[] = [];
+  let consecutiveFullPageBeforeStart = 0;
 
-  for (let page = 0; page < V2_REWARD_FULL_SCAN_MAX_PAGES; page += 1) {
+  for (let page = 0; page < V2_REWARD_UNBOUNDED_MAX_PAGES; page += 1) {
     const raw = await callSubscanPost<Record<string, unknown> | null>(input.network, apiKey, "/api/v2/scan/account/reward_slash", {
       address: address.toLowerCase(),
       row: V2_ROW,
       page,
+      order: "desc",
       ...REWARD_SLASH_BODY,
     });
     const data = raw && typeof raw === "object" ? raw : {};
@@ -766,6 +836,9 @@ async function fetchRewardSlashV2UnboundedPages(
     if (rows.length === 0) {
       break;
     }
+
+    const times = rows.map((row) => toUnixSecondsForChain(row.block_timestamp));
+    const maxTs = Math.max(...times);
 
     for (const row of rows) {
       const ts = toUnixSecondsForChain(row.block_timestamp);
@@ -776,6 +849,14 @@ async function fetchRewardSlashV2UnboundedPages(
 
     if (rows.length < V2_ROW) {
       break;
+    }
+    if (rows.length === V2_ROW && maxTs < startUnix) {
+      consecutiveFullPageBeforeStart += 1;
+      if (consecutiveFullPageBeforeStart >= 2) {
+        break;
+      }
+    } else {
+      consecutiveFullPageBeforeStart = 0;
     }
   }
 
@@ -798,8 +879,9 @@ async function fetchRewardSlashV1UnboundedPages(
   }
 
   const collected: V2RewardSlash[] = [];
+  let consecutiveFullPageBeforeStart = 0;
 
-  for (let page = 0; page < V2_REWARD_FULL_SCAN_MAX_PAGES; page += 1) {
+  for (let page = 0; page < V2_REWARD_UNBOUNDED_MAX_PAGES; page += 1) {
     const raw = await callSubscanPost<Record<string, unknown> | null>(input.network, apiKey, "/api/scan/account/reward_slash", {
       address: address.toLowerCase(),
       row: V2_ROW,
@@ -813,6 +895,9 @@ async function fetchRewardSlashV1UnboundedPages(
       break;
     }
 
+    const times = rows.map((r) => toUnixSecondsForChain(r.block_timestamp));
+    const maxTs = Math.max(...times);
+
     for (const row of rows) {
       const ts = toUnixSecondsForChain(row.block_timestamp);
       if (ts >= startUnix && ts <= endUnix) {
@@ -822,6 +907,14 @@ async function fetchRewardSlashV1UnboundedPages(
 
     if (rows.length < V2_ROW) {
       break;
+    }
+    if (rows.length === V2_ROW && maxTs < startUnix) {
+      consecutiveFullPageBeforeStart += 1;
+      if (consecutiveFullPageBeforeStart >= 2) {
+        break;
+      }
+    } else {
+      consecutiveFullPageBeforeStart = 0;
     }
   }
 

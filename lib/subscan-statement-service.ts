@@ -268,38 +268,76 @@ export async function getLiveStatementFromSubscan(
 
   const startUnix = startOfDayUnix(input.startDate);
   const endUnix = endOfDayUnix(input.endDate);
+  const dayBeforeStart = addCalendarDaysUtc(input.startDate, -1);
+  const dayAfterEnd = addCalendarDaysUtc(input.endDate, 1);
+  const tsPeriodOpen = startOfDayUnix(input.startDate);
+  const tsPeriodClose = startOfDayUnix(dayAfterEnd);
 
   const [substrateBlockWindow, evmBlockWindow] = await Promise.all([
     resolveSubstrateBlockWindow(input, apiKey),
     resolveEvmBlockWindow(input, apiKey),
   ]);
 
-  const [currentBalanceWei, balanceHistoryRaw, transfers, rewards, extrinsics, evmTxs, erc20Txs, nftTxs] =
-    await Promise.all([
-      fetchCurrentEvmBalanceWei(input, apiKey),
-      fetchBalanceHistory(input, apiKey, {
-        start: addCalendarDaysUtc(input.startDate, -1),
-        end: addCalendarDaysUtc(input.endDate, 1),
-      }),
-      fetchV2Transfers(input, apiKey, substrateBlockWindow),
-      fetchV2RewardSlashForStatementPeriod(input, apiKey, startUnix, endUnix, substrateBlockWindow),
-      fetchV2Extrinsics(input, apiKey, substrateBlockWindow),
-      fetchEvmTxList(input, apiKey, evmBlockWindow),
-      fetchEvmTokenTransfers(input, apiKey, evmBlockWindow),
-      fetchEvmNftTransfers(input, apiKey, evmBlockWindow),
-    ]);
+  const [
+    bookendBlocks,
+    currentBalanceWei,
+    balanceHistoryRaw,
+    transfers,
+    rewards,
+    extrinsics,
+    evmTxs,
+    erc20Txs,
+    nftTxs,
+  ] = await Promise.all([
+    Promise.all([
+      resolveSubstrateBlockForStatementBookend(input, apiKey, tsPeriodOpen),
+      resolveSubstrateBlockForStatementBookend(input, apiKey, tsPeriodClose),
+    ]),
+    fetchCurrentEvmBalanceWei(input, apiKey),
+    fetchBalanceHistory(input, apiKey, {
+      start: addCalendarDaysUtc(input.startDate, -1),
+      end: addCalendarDaysUtc(input.endDate, 1),
+    }),
+    fetchV2Transfers(input, apiKey, substrateBlockWindow),
+    fetchV2RewardSlashForStatementPeriod(input, apiKey, startUnix, endUnix, substrateBlockWindow),
+    fetchV2Extrinsics(input, apiKey, substrateBlockWindow),
+    fetchEvmTxList(input, apiKey, evmBlockWindow),
+    fetchEvmTokenTransfers(input, apiKey, evmBlockWindow),
+    fetchEvmNftTransfers(input, apiKey, evmBlockWindow),
+  ]);
 
-  const balanceHistory = await enrichBookendHistoryIfNeeded(
-    input,
-    apiKey,
-    balanceHistoryRaw.map((r) => ({
-      date: normalizeSubscanYmdDate(r.date),
-      balance: r.balance,
-      block: r.block,
-    })),
-    input.startDate,
-    input.endDate,
-  );
+  const [blkBegin, blkEnd] = bookendBlocks;
+  const chainTotalsPromise: Promise<{ beginning: number | null; ending: number | null }> =
+    input.network === "Moonbeam" && blkBegin != null && blkEnd != null
+      ? (async () => {
+          try {
+            const [accBegin, accEnd] = await Promise.all([
+              getMoonbeamSystemAccountTotalsAtSubstrateBlock(input.walletAddress, blkBegin),
+              getMoonbeamSystemAccountTotalsAtSubstrateBlock(input.walletAddress, blkEnd),
+            ]);
+            return { beginning: accBegin?.total ?? null, ending: accEnd?.total ?? null };
+          } catch {
+            return { beginning: null, ending: null };
+          }
+        })()
+      : Promise.resolve({ beginning: null, ending: null });
+
+  const [balanceHistory, chainBookends] = await Promise.all([
+    enrichBookendHistoryIfNeeded(
+      input,
+      apiKey,
+      balanceHistoryRaw.map((r) => ({
+        date: normalizeSubscanYmdDate(r.date),
+        balance: r.balance,
+        block: r.block,
+      })),
+      input.startDate,
+      input.endDate,
+    ),
+    chainTotalsPromise,
+  ]);
+  const chainBeginning = chainBookends.beginning;
+  const chainEnding = chainBookends.ending;
 
   const wallet = input.walletAddress.toLowerCase();
 
@@ -482,12 +520,8 @@ export async function getLiveStatementFromSubscan(
   for (const [date, count] of transferCountByDate) addCountOnlyCategory(date, "Transfers", count);
 
   const sortedHistory = [...balanceHistory].sort((a, b) => a.date.localeCompare(b.date));
-  const dayBeforeStart = addCalendarDaysUtc(input.startDate, -1);
-  const dayAfterEnd = addCalendarDaysUtc(input.endDate, 1);
   const todayUtc = new Date().toISOString().slice(0, 10);
   const useCurrentEndFallback = input.endDate >= todayUtc;
-  const tsPeriodOpen = startOfDayUnix(input.startDate);
-  const tsPeriodClose = startOfDayUnix(dayAfterEnd);
 
   /** Subscan `balance_history` = total GLMR (free + staked, etc.); not the EVM `eth_getBalance` “reducible” amount. */
   let currentGlmrTotal = weiToTokenAmount(currentBalanceWei);
@@ -550,27 +584,6 @@ export async function getLiveStatementFromSubscan(
     input.startDate < todayUtc &&
     nearCurrent(begParsedExact) &&
     Math.abs(netFromLines) > 1e-8;
-
-  let chainBeginning: number | null = null;
-  let chainEnding: number | null = null;
-  if (input.network === "Moonbeam") {
-    try {
-      const [blkBegin, blkEnd] = await Promise.all([
-        resolveSubstrateBlockForStatementBookend(input, apiKey, tsPeriodOpen),
-        resolveSubstrateBlockForStatementBookend(input, apiKey, tsPeriodClose),
-      ]);
-      if (blkBegin != null && blkEnd != null) {
-        const [accBegin, accEnd] = await Promise.all([
-          getMoonbeamSystemAccountTotalsAtSubstrateBlock(input.walletAddress, blkBegin),
-          getMoonbeamSystemAccountTotalsAtSubstrateBlock(input.walletAddress, blkEnd),
-        ]);
-        chainBeginning = accBegin?.total ?? null;
-        chainEnding = accEnd?.total ?? null;
-      }
-    } catch {
-      /* substrate RPC fallback failed; keep Subscan path */
-    }
-  }
 
   /**
    * Bookends: Subscan `balance_history` daily rows (total GLMR: liquid + staked, per Subscan).
@@ -701,7 +714,7 @@ export async function getLiveStatementFromSubscan(
       a.date === b.date ? a.category.localeCompare(b.category) : a.date.localeCompare(b.date),
     ),
     notes: [
-      "Live data source: Subscan balance history + transfers + staking rewards (v2 reward_slash, same data as Reward tab / Download all, paged newest-first then filtered by date) + extrinsics + EVM activity.",
+      "Live data source: Subscan balance history + transfers + staking rewards (v2 reward_slash, same data as Reward tab: block-scoped and chunked fetches when possible, otherwise paged newest-first with early stop once pages are before the start date) + extrinsics + EVM activity.",
       substrateBlockWindow
         ? `Substrate block window (v2 transfers/extrinsics): ${substrateBlockWindow.from}–${substrateBlockWindow.to} (from /api/scan/block — not EVM block height).`
         : "Could not resolve a Substrate block range from dates; v2 transfers/extrinsics use unbounded paging (slower, may be incomplete for very active accounts).",
