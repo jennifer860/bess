@@ -4,7 +4,6 @@ import Image from "next/image";
 import { useState } from "react";
 import { StatementForm } from "@/components/statement-form";
 import { StatementPreview } from "@/components/statement-preview";
-import { downloadStatementPdf } from "@/lib/pdf-generator";
 import type { StatementData, StatementInput } from "@/types/statement";
 
 const DEFAULT_INPUT: StatementInput = {
@@ -95,13 +94,13 @@ export default function Home() {
               priority
               className="h-auto w-auto max-w-[14rem] object-contain object-left sm:max-w-[16rem] md:max-w-[18rem]"
             />
-            <div className="mt-2 min-w-0 max-w-full overflow-x-auto">
-              <h1 className="w-max whitespace-nowrap text-xl font-bold sm:text-2xl lg:text-3xl">
+            <div className="mt-2 w-full min-w-0 overflow-x-auto overflow-y-hidden py-1.5">
+              <h1 className="block w-max min-h-[1.3em] whitespace-nowrap text-xl font-bold leading-tight sm:text-2xl lg:text-3xl">
                 BESS - Blockchain Explorer Simple Statement
               </h1>
             </div>
-            <div className="mt-1 min-w-0 max-w-full overflow-x-auto">
-              <p className="w-max min-w-0 whitespace-nowrap text-xs text-bess-ink/85 sm:text-sm">
+            <div className="mt-1 w-full min-w-0 overflow-x-auto overflow-y-hidden py-0.5">
+              <p className="w-max whitespace-nowrap text-xs leading-snug text-bess-ink/85 sm:text-sm">
                 Generate professional account statement previews and export bank-style PDFs from live
                 Subscan data for your wallet and selected period.
               </p>
@@ -109,8 +108,8 @@ export default function Home() {
           </div>
         </header>
 
-        <div className="grid gap-6 lg:grid-cols-[minmax(0,22rem)_minmax(0,1fr)]">
-          <div className="space-y-4">
+        <div className="grid gap-6 lg:grid-cols-[minmax(0,40rem)_minmax(0,1fr)]">
+          <div className="min-w-0 space-y-4">
             <StatementForm value={input} isLoading={isLoading} onChange={setInput} onGenerate={handleGeneratePreview} />
 
             {errorMessage ? (
@@ -118,21 +117,11 @@ export default function Home() {
                 {errorMessage}
               </p>
             ) : null}
-
-            <button
-              type="button"
-              className="w-full rounded-lg bg-bess-blue px-5 py-3 text-sm font-medium text-white hover:bg-bess-blue/90"
-              onClick={() => {
-                if (statement) {
-                  downloadStatementPdf(statement);
-                }
-              }}
-            >
-              Download Statement PDF
-            </button>
           </div>
 
-          <StatementPreview statement={statement} isLoading={isLoading} />
+          <div className="min-w-0 w-full max-w-4xl justify-self-stretch lg:justify-self-end">
+            <StatementPreview statement={statement} isLoading={isLoading} />
+          </div>
         </div>
       </main>
     </div>

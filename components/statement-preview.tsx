@@ -1,3 +1,6 @@
+"use client";
+
+import { downloadStatementPdf } from "@/lib/pdf-generator";
 import { formatAmount, hasNoActivity } from "@/lib/statement-calculations";
 import type { StatementData } from "@/types/statement";
 
@@ -96,6 +99,16 @@ export function StatementPreview({ statement, isLoading = false }: StatementPrev
             ))}
           </tbody>
         </table>
+      </div>
+
+      <div className="mt-6">
+        <button
+          type="button"
+          className="w-full rounded-lg bg-bess-blue px-5 py-3 text-sm font-medium text-white hover:bg-bess-blue/90"
+          onClick={() => downloadStatementPdf(statement)}
+        >
+          Download Statement PDF
+        </button>
       </div>
 
       <div className="mt-6 min-w-0 rounded-xl border border-bess-ink/10">
