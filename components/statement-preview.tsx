@@ -3,9 +3,19 @@ import type { StatementData } from "@/types/statement";
 
 type StatementPreviewProps = {
   statement: StatementData | null;
+  isLoading?: boolean;
 };
 
-export function StatementPreview({ statement }: StatementPreviewProps) {
+export function StatementPreview({ statement, isLoading = false }: StatementPreviewProps) {
+  if (isLoading) {
+    return (
+      <section className="rounded-2xl border border-bess-ink/10 bg-white p-6 shadow-sm">
+        <h2 className="text-xl font-semibold text-bess-ink">Statement Preview</h2>
+        <p className="mt-4 text-sm text-bess-ink/70">Loading statement data…</p>
+      </section>
+    );
+  }
+
   if (!statement) {
     return (
       <section className="rounded-2xl border border-dashed border-bess-ink/25 bg-bess-mist/50 p-6 text-bess-ink/70">
@@ -25,7 +35,7 @@ export function StatementPreview({ statement }: StatementPreviewProps) {
   ];
 
   return (
-    <section className="rounded-2xl border border-bess-ink/10 bg-white p-6 shadow-sm">
+    <section className="min-w-0 w-full rounded-2xl border border-bess-ink/10 bg-white p-6 shadow-sm">
       <div className="border-b border-bess-ink/10 pb-4">
         <h2 className="text-xl font-semibold text-bess-ink">Statement Preview</h2>
         <p className="mt-1 text-sm text-bess-ink/75">
@@ -33,13 +43,13 @@ export function StatementPreview({ statement }: StatementPreviewProps) {
         </p>
       </div>
 
-      <div className="mt-5 grid gap-6 lg:grid-cols-2">
+      <div className="mt-5 flex flex-col gap-6">
         <div className="min-w-0 rounded-xl border border-bess-ink/10 p-4">
           <h3 className="text-base font-semibold text-bess-ink">Account Details</h3>
           <dl className="mt-3 space-y-3 text-sm">
             <div className="min-w-0">
               <dt className="text-bess-ink/60">Wallet</dt>
-              <dd className="mt-1 w-full min-w-0 overflow-x-auto whitespace-nowrap font-mono text-[0.8125rem] leading-normal text-bess-ink sm:text-sm">
+              <dd className="mt-1 w-full min-w-0 break-all font-mono text-[0.8125rem] leading-relaxed text-bess-ink sm:text-sm">
                 {statement.walletAddress}
               </dd>
             </div>
@@ -67,19 +77,19 @@ export function StatementPreview({ statement }: StatementPreviewProps) {
         </div>
       </div>
 
-      <div className="mt-6 overflow-x-auto">
-        <table className="min-w-full border-collapse text-sm">
+      <div className="mt-6 min-w-0 overflow-x-auto">
+        <table className="w-full min-w-[32rem] border-collapse text-sm">
           <thead>
             <tr className="bg-bess-ink text-left text-bess-mist">
-              <th className="px-3 py-2 font-medium">Account Activity Summary</th>
-              <th className="px-3 py-2 text-right font-medium">Amount</th>
+              <th className="whitespace-nowrap px-3 py-2 font-medium">Account Activity Summary</th>
+              <th className="whitespace-nowrap px-3 py-2 text-right font-medium">Amount</th>
             </tr>
           </thead>
           <tbody>
             {summaryRows.map(([label, value]) => (
               <tr key={label} className="border-b border-bess-ink/10">
-                <td className="px-3 py-2 text-bess-ink/80">{label}</td>
-                <td className="px-3 py-2 text-right font-medium text-bess-ink">
+                <td className="whitespace-nowrap px-3 py-2 text-bess-ink/80">{label}</td>
+                <td className="whitespace-nowrap px-3 py-2 text-right font-medium text-bess-ink tabular-nums">
                   {formatAmount(Number(value), statement.tokenSymbol)}
                 </td>
               </tr>
@@ -88,36 +98,38 @@ export function StatementPreview({ statement }: StatementPreviewProps) {
         </table>
       </div>
 
-      <div className="mt-6 rounded-xl border border-bess-ink/10">
+      <div className="mt-6 min-w-0 rounded-xl border border-bess-ink/10">
         <div className="border-b border-bess-ink/10 px-4 py-3">
           <h3 className="text-base font-semibold text-bess-ink">Daily Transaction Details</h3>
         </div>
         {hasNoActivity(statement) ? (
           <p className="px-4 py-5 text-sm font-medium text-bess-ink/80">No Activity During Month</p>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-sm">
+          <div className="min-w-0 overflow-x-auto">
+            <table className="w-full min-w-[52rem] text-sm">
               <thead className="bg-bess-mist text-bess-ink">
                 <tr>
-                  <th className="px-3 py-2 text-left font-medium">Date</th>
-                  <th className="px-3 py-2 text-left font-medium">Type</th>
-                  <th className="px-3 py-2 text-left font-medium">Direction</th>
-                  <th className="px-3 py-2 text-right font-medium">Amount</th>
-                  <th className="px-3 py-2 text-right font-medium">Tx Count</th>
+                  <th className="whitespace-nowrap px-3 py-2 text-left font-medium">Date</th>
+                  <th className="whitespace-nowrap px-3 py-2 text-left font-medium">Type</th>
+                  <th className="whitespace-nowrap px-3 py-2 text-left font-medium">Direction</th>
+                  <th className="whitespace-nowrap px-3 py-2 text-right font-medium">Amount</th>
+                  <th className="whitespace-nowrap px-3 py-2 text-right font-medium">Tx Count</th>
                 </tr>
               </thead>
               <tbody>
                 {statement.detailLines.map((line, index) => (
                   <tr key={`${line.date}-${line.category}-${index}`} className="border-t border-bess-ink/10">
-                    <td className="px-3 py-2 text-bess-ink/80">{line.date}</td>
-                    <td className="px-3 py-2 text-bess-ink/80">{line.category}</td>
-                    <td className="px-3 py-2 text-bess-ink/80">
+                    <td className="whitespace-nowrap px-3 py-2 text-bess-ink/80">{line.date}</td>
+                    <td className="whitespace-nowrap px-3 py-2 text-bess-ink/80">{line.category}</td>
+                    <td className="whitespace-nowrap px-3 py-2 text-bess-ink/80">
                       {line.direction === "in" ? "Addition" : "Subtraction"}
                     </td>
-                    <td className="px-3 py-2 text-right text-bess-ink">
+                    <td className="whitespace-nowrap px-3 py-2 text-right text-bess-ink tabular-nums">
                       {formatAmount(line.amount, statement.tokenSymbol)}
                     </td>
-                    <td className="px-3 py-2 text-right text-bess-ink/80">{line.txCount}</td>
+                    <td className="whitespace-nowrap px-3 py-2 text-right text-bess-ink/80 tabular-nums">
+                      {line.txCount}
+                    </td>
                   </tr>
                 ))}
               </tbody>

@@ -34,9 +34,18 @@ export function buildStatementSummary(
 }
 
 export function formatAmount(value: number, tokenSymbol: string) {
+  const minDigits = 6;
+  const maxDigits = 6;
+  if (value < 0) {
+    const abs = Math.abs(value).toLocaleString(undefined, {
+      minimumFractionDigits: minDigits,
+      maximumFractionDigits: maxDigits,
+    });
+    return `(${abs}) ${tokenSymbol}`;
+  }
   return `${value.toLocaleString(undefined, {
-    minimumFractionDigits: 6,
-    maximumFractionDigits: 6,
+    minimumFractionDigits: minDigits,
+    maximumFractionDigits: maxDigits,
   })} ${tokenSymbol}`;
 }
 

@@ -57,6 +57,7 @@ export default function Home() {
 
   async function handleGeneratePreview() {
     setErrorMessage(null);
+    setStatement(null);
 
     setIsLoading(true);
     try {
@@ -83,32 +84,28 @@ export default function Home() {
 
   return (
     <div className="min-h-screen bg-bess-mist">
-      <main className="mx-auto w-full max-w-6xl px-4 py-8 md:px-8">
-        <header className="mb-8 rounded-2xl border border-bess-ink/10 bg-bess-mist px-6 py-8 text-bess-ink shadow-sm">
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
-            <div className="shrink-0 rounded-xl border border-bess-ink/10 bg-white p-3">
-              <Image
-                src="/favicon.png"
-                alt="BESS logo"
-                width={64}
-                height={64}
-                priority
-                className="h-16 w-16"
-              />
-            </div>
-            <div>
-              <h1 className="text-3xl font-bold md:text-4xl">
-                BESS - Blockchain Explorer Simple Statement
-              </h1>
-              <p className="mt-3 max-w-3xl text-sm text-bess-ink/85 md:text-base">
-                Generate professional account statement previews and export bank-style PDFs from
-                live Subscan data for your wallet and selected period.
-              </p>
-            </div>
+      <main className="mx-auto w-full max-w-[100rem] px-4 py-8 md:px-8">
+        <header className="mb-8 rounded-2xl border border-bess-ink/10 bg-white px-6 py-8 text-bess-ink shadow-sm">
+          <div className="mx-auto flex max-w-3xl flex-col items-center text-center">
+            <Image
+              src="/cryptostatements-logo.png"
+              alt="CryptoStatements — cryptostatements.xyz"
+              width={1024}
+              height={193}
+              priority
+              className="h-auto w-full max-w-3xl object-contain"
+            />
+            <h1 className="mt-6 text-3xl font-bold md:text-4xl">
+              BESS - Blockchain Explorer Simple Statement
+            </h1>
+            <p className="mt-3 text-sm text-bess-ink/85 md:text-base">
+              Generate professional account statement previews and export bank-style PDFs from live
+              Subscan data for your wallet and selected period.
+            </p>
           </div>
         </header>
 
-        <div className="grid gap-6 lg:grid-cols-[1fr_1.4fr]">
+        <div className="grid gap-6 lg:grid-cols-[minmax(0,22rem)_minmax(0,1fr)]">
           <div className="space-y-4">
             <StatementForm value={input} isLoading={isLoading} onChange={setInput} onGenerate={handleGeneratePreview} />
 
@@ -131,7 +128,7 @@ export default function Home() {
             </button>
           </div>
 
-          <StatementPreview statement={statement} />
+          <StatementPreview statement={statement} isLoading={isLoading} />
         </div>
       </main>
     </div>
