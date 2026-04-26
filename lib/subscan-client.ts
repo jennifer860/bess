@@ -218,19 +218,37 @@ async function callSubscanPost<T>(
 }
 
 /**
- * Map statement dates to on-chain block bounds. Prefer Etherscan-compatible `getblocknobytime` so
- * `startblock`/`endblock` and v2 `block_range` match Moonbeam’s EVM/substrate height. Fall back to
- * `/api/scan/block` (seconds, then ms) if needed.
+ * Parachain / Substrate block height (Subscan v2 `block_range`, on-chain `block_num` for native
+ * modules like staking, transfers). From `/api/scan/block` with `only_head: true`. On EVM+Substrate
+ * networks (e.g. Moonbeam) this is **not** the same number as the Ethereum `eth` block.
  */
-export async function resolveStatementBlockWindow(
+export async function resolveSubstrateBlockWindow(
   input: StatementInput,
   apiKey: string,
 ): Promise<StatementBlockWindow | null> {
   const startT = Math.floor(new Date(`${input.startDate}T00:00:00Z`).getTime() / 1000);
   const endT = Math.floor(new Date(`${input.endDate}T23:59:59Z`).getTime() / 1000);
   const [a, b] = await Promise.all([
-    blockNumberAtUnix(input.network, apiKey, startT),
-    blockNumberAtUnix(input.network, apiKey, endT),
+    substrateBlockNumberAtUnix(input.network, apiKey, startT),
+    substrateBlockNumberAtUnix(input.network, apiKey, endT),
+  ]);
+  if (a == null || b == null) return null;
+  return { from: Math.min(a, b), to: Math.max(a, b) };
+}
+
+/**
+ * Ethereum-style block number for Subscan Etherscan-compatible APIs (`getblocknobytime` for
+ * `txlist`, `tokentx`, `startblock`/`endblock`). Do not use for Subscan v2 `block_range`.
+ */
+export async function resolveEvmBlockWindow(
+  input: StatementInput,
+  apiKey: string,
+): Promise<StatementBlockWindow | null> {
+  const startT = Math.floor(new Date(`${input.startDate}T00:00:00Z`).getTime() / 1000);
+  const endT = Math.floor(new Date(`${input.endDate}T23:59:59Z`).getTime() / 1000);
+  const [a, b] = await Promise.all([
+    evmBlockNumberAtUnix(input.network, apiKey, startT),
+    evmBlockNumberAtUnix(input.network, apiKey, endT),
   ]);
   if (a == null || b == null) return null;
   return { from: Math.min(a, b), to: Math.max(a, b) };
@@ -256,21 +274,12 @@ function pickBlockNumFromScanBlockPayload(data: Record<string, unknown> | null):
   return null;
 }
 
-/** Etherscan-like `getblocknobytime` (Subscan supports on Moonbeam), then `/api/scan/block`. */
-async function blockNumberAtUnix(network: string, apiKey: string, unixSeconds: number): Promise<number | null> {
-  try {
-    const raw = await callEtherscanLike<string>(network, apiKey, {
-      module: "block",
-      action: "getblocknobytime",
-      timestamp: String(unixSeconds),
-      closest: "before",
-    });
-    const n = parseBlockNumberFromApiValue(raw);
-    if (n != null) return n;
-  } catch {
-    /* try scan/block */
-  }
-
+/** Subscan `/api/scan/block` (parachain / substrate block number at `block_timestamp`). */
+async function substrateBlockNumberAtUnix(
+  network: string,
+  apiKey: string,
+  unixSeconds: number,
+): Promise<number | null> {
   for (const ts of [unixSeconds, unixSeconds * 1000]) {
     try {
       const data = (await callSubscanPost<Record<string, unknown> | null>(network, apiKey, "/api/scan/block", {
@@ -284,6 +293,25 @@ async function blockNumberAtUnix(network: string, apiKey: string, unixSeconds: n
     }
   }
   return null;
+}
+
+/** Etherscan `getblocknobytime` — Ethereum L2 / EVM block number (e.g. Moonbeam EVM). */
+async function evmBlockNumberAtUnix(
+  network: string,
+  apiKey: string,
+  unixSeconds: number,
+): Promise<number | null> {
+  try {
+    const raw = await callEtherscanLike<string>(network, apiKey, {
+      module: "block",
+      action: "getblocknobytime",
+      timestamp: String(unixSeconds),
+      closest: "before",
+    });
+    return parseBlockNumberFromApiValue(raw);
+  } catch {
+    return null;
+  }
 }
 
 export async function fetchCurrentEvmBalanceWei(input: StatementInput, apiKey: string) {

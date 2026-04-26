@@ -9,7 +9,8 @@ import {
   fetchV2Extrinsics,
   fetchV2RewardSlash,
   fetchV2Transfers,
-  resolveStatementBlockWindow,
+  resolveEvmBlockWindow,
+  resolveSubstrateBlockWindow,
 } from "@/lib/subscan-client";
 import type { StatementData, StatementInput, StatementLine } from "@/types/statement";
 
@@ -25,6 +26,29 @@ function endOfDayUnix(dateString: string) {
 
 function weiToTokenAmount(value: number) {
   return value / TOKEN_DECIMALS;
+}
+
+const WEI_PER_TOKEN = BigInt("1000000000000000000");
+
+/** Sum of wei integer strings; avoids float overflow on GLMR-scale balances. */
+function weiBigIntToGlmr(wei: bigint) {
+  if (wei === BigInt(0)) return 0;
+  const intPart = wei / WEI_PER_TOKEN;
+  const frac = wei % WEI_PER_TOKEN;
+  return Number(intPart) + Number(frac) / Number(TOKEN_DECIMALS);
+}
+
+function parseRewardWeiString(raw: string | undefined) {
+  if (raw == null) return BigInt(0);
+  const t = raw.trim();
+  if (!/^\d+$/.test(t)) {
+    return BigInt(0);
+  }
+  try {
+    return BigInt(t);
+  } catch {
+    return BigInt(0);
+  }
 }
 
 function toIsoDate(unixSeconds: number) {
@@ -60,18 +84,21 @@ export async function getLiveStatementFromSubscan(
     throw new Error("Live Moonbeam mode requires a valid 0x EVM wallet address (42 characters).");
   }
 
-  const blockWindow = await resolveStatementBlockWindow(input, apiKey);
+  const [substrateBlockWindow, evmBlockWindow] = await Promise.all([
+    resolveSubstrateBlockWindow(input, apiKey),
+    resolveEvmBlockWindow(input, apiKey),
+  ]);
 
   const [currentBalanceWei, balanceHistory, transfers, rewards, extrinsics, evmTxs, erc20Txs, nftTxs] =
     await Promise.all([
       fetchCurrentEvmBalanceWei(input, apiKey),
       fetchBalanceHistory(input, apiKey),
-      fetchV2Transfers(input, apiKey, blockWindow),
-      fetchV2RewardSlash(input, apiKey, blockWindow),
-      fetchV2Extrinsics(input, apiKey, blockWindow),
-      fetchEvmTxList(input, apiKey, blockWindow),
-      fetchEvmTokenTransfers(input, apiKey, blockWindow),
-      fetchEvmNftTransfers(input, apiKey, blockWindow),
+      fetchV2Transfers(input, apiKey, substrateBlockWindow),
+      fetchV2RewardSlash(input, apiKey, substrateBlockWindow),
+      fetchV2Extrinsics(input, apiKey, substrateBlockWindow),
+      fetchEvmTxList(input, apiKey, evmBlockWindow),
+      fetchEvmTokenTransfers(input, apiKey, evmBlockWindow),
+      fetchEvmNftTransfers(input, apiKey, evmBlockWindow),
     ]);
 
   const wallet = input.walletAddress.toLowerCase();
@@ -149,16 +176,19 @@ export async function getLiveStatementFromSubscan(
   const rewardsInPeriod = rewards.filter((reward) =>
     isInRange(toUnixSecondsForChain(reward.block_timestamp), startUnix, endUnix),
   );
-  const rewardByDate = new Map<string, number>();
+  const rewardByDate = new Map<string, bigint>();
   for (const reward of rewardsInPeriod) {
     const date = toIsoDate(toUnixSecondsForChain(reward.block_timestamp));
-    rewardByDate.set(date, (rewardByDate.get(date) ?? 0) + Number(reward.amount || "0"));
+    rewardByDate.set(
+      date,
+      (rewardByDate.get(date) ?? BigInt(0)) + parseRewardWeiString(reward.amount),
+    );
   }
-  for (const [date, amount] of [...rewardByDate.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+  for (const [date, amountWei] of [...rewardByDate.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
     detailLines.push({
       date,
       category: "Reward Income",
-      amount: weiToTokenAmount(amount),
+      amount: weiBigIntToGlmr(amountWei),
       direction: "in",
       txCount: rewardsInPeriod.filter(
         (row) => toIsoDate(toUnixSecondsForChain(row.block_timestamp)) === date,
@@ -284,9 +314,12 @@ export async function getLiveStatementFromSubscan(
     ),
     notes: [
       "Live data source: Subscan balance history + transfers + reward/slash + extrinsics + EVM activity.",
-      blockWindow
-        ? `On-chain block window for list APIs: ${blockWindow.from}–${blockWindow.to} (from statement dates via Etherscan-like getblocknobytime, with /api/scan/block fallback).`
-        : "Could not resolve a block range from dates; Substrate/EVM lists use unbounded paging (slower, may be incomplete for very active accounts).",
+      substrateBlockWindow
+        ? `Substrate block window (v2 transfers/rewards/extrinsics): ${substrateBlockWindow.from}–${substrateBlockWindow.to} (from /api/scan/block timestamps — not EVM block height).`
+        : "Could not resolve a Substrate block range from dates; v2 list APIs use unbounded paging (slower, may be incomplete for very active accounts).",
+      evmBlockWindow
+        ? `EVM block window (txlist/tokentx): ${evmBlockWindow.from}–${evmBlockWindow.to} (getblocknobytime).`
+        : "Could not resolve an EVM block range; Etherscan-style lists use unbounded paging.",
       "Beginning/ending balances are taken from Subscan balance history snapshots for the selected dates.",
       sortedHistory.length
         ? `Balance snapshots returned from ${sortedHistory[0].date} to ${sortedHistory[sortedHistory.length - 1].date}.`
