@@ -5,10 +5,26 @@
  * `eth_getBalance` at a resolved block.
  */
 
-const DEFAULT_MOONBEAM_HTTPS_RPC = "https://rpc.api.moonbeam.network";
+/** Prefer OnFinality public — often more usable for `eth_getBalance` at old heights than the default Moonbeam public node alone. */
+const DEFAULT_MOONBEAM_HTTPS_RPC = "https://moonbeam.api.onfinality.io/public";
 
 export function getMoonbeamPublicRpcUrl() {
   return (typeof process !== "undefined" && process.env.MOONBEAM_RPC_URL?.trim()) || DEFAULT_MOONBEAM_HTTPS_RPC;
+}
+
+/** Tried in order for `eth_getBalance` until one succeeds. Deduped. */
+export function getMoonbeamRpcTryList() {
+  const fromEnv = typeof process !== "undefined" ? process.env.MOONBEAM_RPC_URL?.trim() : undefined;
+  const candidates = [
+    fromEnv,
+    "https://moonbeam.api.onfinality.io/public",
+    "https://1rpc.io/glmr",
+    "https://rpc.api.moonbeam.network",
+    "https://moonbeam-rpc.publicnode.com",
+    "https://moonbeam.unitedbloc.com",
+  ].filter((u): u is string => Boolean(u));
+  const seen = new Set<string>();
+  return candidates.filter((u) => (seen.has(u) ? false : (seen.add(u), true)));
 }
 
 type JsonRpcRes<T> = { result?: T; error?: { message: string; code?: number } };

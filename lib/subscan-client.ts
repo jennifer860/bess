@@ -2,7 +2,7 @@ import { toUnixSecondsForChain } from "@/lib/chain-timestamp";
 import {
   ethGetBalanceGlmrAtEvmBlockFromRpc,
   evmLargestBlockBeforeUnixSecond,
-  getMoonbeamPublicRpcUrl,
+  getMoonbeamRpcTryList,
 } from "@/lib/moonbeam-evm-rpc";
 import type { StatementInput } from "@/types/statement";
 
@@ -359,13 +359,15 @@ export async function resolveEvmBlockForStatementBookend(
       return fromSubscan;
     }
 
-    try {
-      const fromRpc = await evmLargestBlockBeforeUnixSecond(getMoonbeamPublicRpcUrl(), unixSeconds);
-      if (plausible(fromRpc)) {
-        return fromRpc;
+    for (const rpc of getMoonbeamRpcTryList()) {
+      try {
+        const fromRpc = await evmLargestBlockBeforeUnixSecond(rpc, unixSeconds);
+        if (plausible(fromRpc)) {
+          return fromRpc;
+        }
+      } catch {
+        /* try next endpoint */
       }
-    } catch {
-      /* no archival RPC; Subscan was already tried */
     }
     return null;
   }
@@ -434,15 +436,15 @@ export async function tryMoonbeamGlmrAtEvmBlockRpc(
   if (input.network !== "Moonbeam") {
     return null;
   }
-  try {
-    return await ethGetBalanceGlmrAtEvmBlockFromRpc(
-      getMoonbeamPublicRpcUrl(),
-      input.walletAddress.trim().toLowerCase(),
-      evmBlockNumber,
-    );
-  } catch {
-    return null;
+  const address = input.walletAddress.trim().toLowerCase();
+  for (const rpc of getMoonbeamRpcTryList()) {
+    try {
+      return await ethGetBalanceGlmrAtEvmBlockFromRpc(rpc, address, evmBlockNumber);
+    } catch {
+      /* try next public endpoint */
+    }
   }
+  return null;
 }
 
 /**

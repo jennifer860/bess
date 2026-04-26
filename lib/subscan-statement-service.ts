@@ -361,7 +361,37 @@ export async function getLiveStatementFromSubscan(
     : useCurrentEndFallback
       ? weiToTokenAmount(currentBalanceWei)
       : 0;
+  /** If Subscan’s loose/history path produced no values (common for 2022–23 before API rows exist). */
+  const looseSubscanAllZero = subscanBeginning === 0 && subscanEnding === 0;
 
+  /** `beginning=0` → `ending` = sum of in − out for the same lines the summary uses. */
+  const netFromLines = buildStatementSummary(0, detailLines).endingBalance;
+  const currentGlmr = weiToTokenAmount(currentBalanceWei);
+  const periodEnded = input.endDate < todayUtc;
+  const nearCurrent = (n: number) => Math.abs(n - currentGlmr) < 0.0001;
+
+  const startRowForBookend = findBalanceForDate(sortedHistory, input.startDate);
+  const endRowForBookend =
+    findBalanceForDate(sortedHistory, dayAfterEnd) ?? findBalanceForDate(sortedHistory, input.endDate);
+  const hasSubscanDateRows = startRowForBookend != null && endRowForBookend != null;
+  const begParsedExact = startRowForBookend != null ? parseSubscanHistoryBalanceGlmr(startRowForBookend) : 0;
+  const endParsedExact = endRowForBookend != null ? parseSubscanHistoryBalanceGlmr(endRowForBookend) : 0;
+  const staleSubscanDaily =
+    hasSubscanDateRows &&
+    periodEnded &&
+    nearCurrent(begParsedExact) &&
+    nearCurrent(endParsedExact) &&
+    Math.abs(netFromLines) > 1e-8;
+  /** Start date in the past but Subscan’s start-day row = live balance; common when end = “through today”. */
+  const staleSubscanStartRowWhileOpen =
+    hasSubscanDateRows &&
+    !periodEnded &&
+    input.startDate < todayUtc &&
+    nearCurrent(begParsedExact) &&
+    Math.abs(netFromLines) > 1e-8;
+
+  // Bookends = native GLMR at EVM blocks for: start of first day, start of (end+1) day — same
+  // as `getMoonbeamGlmrAsOfEndOfCalendarDayUtc` for a single "as of that day" snapshot.
   const tsStart = startOfDayUnix(input.startDate);
   const tsClose = startOfDayUnix(dayAfterEnd);
   const evmBlockStart = await resolveEvmBlockForStatementBookend(input, apiKey, tsStart);
@@ -369,7 +399,7 @@ export async function getLiveStatementFromSubscan(
 
   let beginningBalance: number;
   let endingBalance: number;
-  let bookendSource: "evm" | "subscan" | "subscan+current" = "subscan";
+  let bookendSource: "evm" | "subscan" | "subscan+current" | "reconciled" = "subscan";
 
   const evmBlocksDegenerate =
     evmBlockStart != null &&
@@ -377,18 +407,26 @@ export async function getLiveStatementFromSubscan(
     evmBlockStart === evmBlockClose &&
     input.startDate < dayAfterEnd;
 
-  const startRowForBookend = findBalanceForDate(sortedHistory, input.startDate);
-  const endRowForBookend =
-    findBalanceForDate(sortedHistory, dayAfterEnd) ?? findBalanceForDate(sortedHistory, input.endDate);
-  const hasSubscanDateRows = startRowForBookend != null && endRowForBookend != null;
-
-  const currentGlmr = weiToTokenAmount(currentBalanceWei);
-  const periodEnded = input.endDate < todayUtc;
-
-  if (input.network === "Moonbeam" && hasSubscanDateRows) {
-    beginningBalance = parseSubscanHistoryBalanceGlmr(startRowForBookend);
-    endingBalance = parseSubscanHistoryBalanceGlmr(endRowForBookend);
+  if (
+    input.network === "Moonbeam" &&
+    hasSubscanDateRows &&
+    !staleSubscanDaily &&
+    !staleSubscanStartRowWhileOpen
+  ) {
+    beginningBalance = begParsedExact;
+    endingBalance = endParsedExact;
     bookendSource = "subscan";
+  } else if (input.network === "Moonbeam" && evmBlocksDegenerate && evmBlockStart != null) {
+    const one = await tryMoonbeamGlmrAtEvmBlockRpc(input, evmBlockStart);
+    if (one != null) {
+      beginningBalance = one;
+      endingBalance = one;
+      bookendSource = "evm";
+    } else {
+      beginningBalance = subscanBeginning;
+      endingBalance = subscanEnding;
+      bookendSource = useCurrentEndFallback && !endBalanceRaw ? "subscan+current" : "subscan";
+    }
   } else if (
     input.network === "Moonbeam" &&
     evmBlockStart != null &&
@@ -403,9 +441,10 @@ export async function getLiveStatementFromSubscan(
     const bothMatchCurrent =
       bothRpcOk &&
       periodEnded &&
-      Math.abs((evmA as number) - currentGlmr) < 0.0001 &&
-      Math.abs((evmB as number) - currentGlmr) < 0.0001;
-    if (bothRpcOk && !bothMatchCurrent) {
+      nearCurrent(evmA as number) &&
+      nearCurrent(evmB as number);
+    const useEvm = bothRpcOk && (!bothMatchCurrent || looseSubscanAllZero);
+    if (useEvm) {
       beginningBalance = evmA as number;
       endingBalance = evmB as number;
       bookendSource = "evm";
@@ -418,6 +457,27 @@ export async function getLiveStatementFromSubscan(
     beginningBalance = subscanBeginning;
     endingBalance = subscanEnding;
     bookendSource = useCurrentEndFallback && !endBalanceRaw ? "subscan+current" : "subscan";
+  }
+
+  if (input.network === "Moonbeam" && Math.abs(netFromLines) > 1e-8) {
+    if (
+      periodEnded &&
+      nearCurrent(beginningBalance) &&
+      nearCurrent(endingBalance) &&
+      subscanBeginning > 1e-8
+    ) {
+      bookendSource = "reconciled";
+      beginningBalance = subscanBeginning;
+      endingBalance = subscanBeginning + netFromLines;
+    } else if (
+      !periodEnded &&
+      input.startDate < todayUtc &&
+      nearCurrent(beginningBalance)
+    ) {
+      bookendSource = "reconciled";
+      beginningBalance = currentGlmr - netFromLines;
+      endingBalance = currentGlmr;
+    }
   }
 
   const summary = buildStatementSummary(beginningBalance, detailLines);
@@ -449,9 +509,11 @@ export async function getLiveStatementFromSubscan(
       evmBlockWindow
         ? `EVM block window (txlist/tokentx): ${evmBlockWindow.from}–${evmBlockWindow.to} (getblocknobytime).`
         : "Could not resolve an EVM block range; Etherscan-style lists use unbounded paging.",
-      bookendSource === "evm"
-        ? `Beginning/ending: eth_getBalance on ${getMoonbeamPublicRpcUrl()} at EVM blocks ${evmBlockStart} and ${evmBlockClose} (heights from Subscan getblocknobytime when available). We avoid Subscan Etherscan “balance at block” — it often equals current GLMR. When daily balance_history has rows for the start and end dates, that path is used instead.`
-        : "Beginning/ending: Subscan balance_history daily rows (wei or GLMR), or current end only for an in-progress through-date. We fall back from RPC when the read would match the live balance for a past period, or when RPC fails.",
+      bookendSource === "reconciled"
+        ? `Beginning/ending: Subscan daily rows looked like the live current GLMR (stale history). We matched the statement to your line items: for a period that ends before today, ending = loose pick for begin + net GLMR from lines; if the through-date includes today, ending = current on-chain GLMR and beginning = current minus that net. True historical bookends may need an archival RPC (set MOONBEAM_RPC_URL).`
+        : bookendSource === "evm"
+          ? `Beginning/ending: eth_getBalance (tries several public Moonbeam RPCs) at EVM blocks ${evmBlockStart} and ${evmBlockClose}.`
+          : "Beginning/ending: Subscan balance_history daily rows where available, or current end for an in-progress through-date.",
       sortedHistory.length
         ? `Balance snapshots returned from ${sortedHistory[0].date} to ${sortedHistory[sortedHistory.length - 1].date}.`
         : "No balance history snapshots were returned for this wallet and period.",
