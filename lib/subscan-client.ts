@@ -85,6 +85,11 @@ function getApiHost(network: string) {
   return NETWORK_TO_API_HOST[network] ?? `${network.toLowerCase()}.api.subscan.io`;
 }
 
+/** Subscan Etherscan API often returns `"result": null` for empty `txlist` / `tokentx` / `tokennfttx` lists. */
+function etherscanListResult<T>(value: T[] | null | undefined): T[] {
+  return Array.isArray(value) ? value : [];
+}
+
 /** Space between each Subscan HTTP call (one global queue) to stay under key limits. */
 const SUBSCAN_MIN_GAP_MS = 450;
 /** Exponential backoff base when Subscan returns HTTP 429 (code 20008). */
@@ -160,7 +165,7 @@ async function callEtherscanLike<T>(
     }
 
     if (payload.message === "No transactions found") {
-      return payload.result;
+      return etherscanListResult(payload.result as unknown[] | null | undefined) as T;
     }
 
     const detail = parseSubscanErrorDetail(payload.result);
@@ -224,16 +229,18 @@ export async function fetchEvmTxList(input: StatementInput, apiKey: string) {
   const all: EvmTx[] = [];
 
   for (let page = 1; page <= MAX_PAGES; page += 1) {
-    const batch = await callEtherscanLike<EvmTx[]>(input.network, apiKey, {
-      module: "account",
-      action: "txlist",
-      address: input.walletAddress,
-      startblock: "0",
-      endblock: "99999999",
-      page: String(page),
-      offset: String(PAGE_SIZE),
-      sort: "asc",
-    });
+    const batch = etherscanListResult(
+      await callEtherscanLike<EvmTx[] | null>(input.network, apiKey, {
+        module: "account",
+        action: "txlist",
+        address: input.walletAddress,
+        startblock: "0",
+        endblock: "99999999",
+        page: String(page),
+        offset: String(PAGE_SIZE),
+        sort: "asc",
+      }),
+    );
 
     if (!batch.length) {
       break;
@@ -260,6 +267,9 @@ export async function fetchBalanceHistory(input: StatementInput, apiKey: string)
     },
   );
 
+  if (!data || typeof data !== "object") {
+    return [];
+  }
   return data.history ?? [];
 }
 
@@ -275,15 +285,16 @@ async function fetchV2Paged<T>(
   const all: T[] = [];
 
   for (let page = 0; page < MAX_PAGES; page += 1) {
-    const data = (await callSubscanPost<Record<string, unknown>>(input.network, apiKey, path, {
+    const raw = await callSubscanPost<Record<string, unknown> | null>(input.network, apiKey, path, {
       address: input.walletAddress,
       row: ROW,
       page,
       order: "asc",
       ...extraBody,
-    })) as Record<string, unknown>;
-
-    const rows = (data[listField] as T[] | undefined) ?? [];
+    });
+    const data = raw && typeof raw === "object" ? raw : {};
+    const list = data[listField];
+    const rows = Array.isArray(list) ? (list as T[]) : [];
     if (!rows.length) {
       break;
     }
@@ -323,16 +334,18 @@ export async function fetchEvmTokenTransfers(input: StatementInput, apiKey: stri
   const all: EvmTokenTransfer[] = [];
 
   for (let page = 1; page <= MAX_PAGES; page += 1) {
-    const batch = await callEtherscanLike<EvmTokenTransfer[]>(input.network, apiKey, {
-      module: "account",
-      action: "tokentx",
-      address: input.walletAddress,
-      startblock: "0",
-      endblock: "99999999",
-      page: String(page),
-      offset: String(PAGE_SIZE),
-      sort: "asc",
-    });
+    const batch = etherscanListResult(
+      await callEtherscanLike<EvmTokenTransfer[] | null>(input.network, apiKey, {
+        module: "account",
+        action: "tokentx",
+        address: input.walletAddress,
+        startblock: "0",
+        endblock: "99999999",
+        page: String(page),
+        offset: String(PAGE_SIZE),
+        sort: "asc",
+      }),
+    );
 
     if (!batch.length) {
       break;
@@ -352,16 +365,18 @@ export async function fetchEvmNftTransfers(input: StatementInput, apiKey: string
   const all: EvmTokenTransfer[] = [];
 
   for (let page = 1; page <= MAX_PAGES; page += 1) {
-    const batch = await callEtherscanLike<EvmTokenTransfer[]>(input.network, apiKey, {
-      module: "account",
-      action: "tokennfttx",
-      address: input.walletAddress,
-      startblock: "0",
-      endblock: "99999999",
-      page: String(page),
-      offset: String(PAGE_SIZE),
-      sort: "asc",
-    });
+    const batch = etherscanListResult(
+      await callEtherscanLike<EvmTokenTransfer[] | null>(input.network, apiKey, {
+        module: "account",
+        action: "tokennfttx",
+        address: input.walletAddress,
+        startblock: "0",
+        endblock: "99999999",
+        page: String(page),
+        offset: String(PAGE_SIZE),
+        sort: "asc",
+      }),
+    );
 
     if (!batch.length) {
       break;
