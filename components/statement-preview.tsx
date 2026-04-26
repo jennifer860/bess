@@ -34,20 +34,18 @@ export function StatementPreview({ statement }: StatementPreviewProps) {
       </div>
 
       <div className="mt-5 grid gap-6 lg:grid-cols-2">
-        <div className="rounded-xl border border-bess-ink/10 p-4">
+        <div className="min-w-0 rounded-xl border border-bess-ink/10 p-4">
           <h3 className="text-base font-semibold text-bess-ink">Account Details</h3>
-          <dl className="mt-3 space-y-2 text-sm">
-            <div className="flex items-start justify-between gap-4">
+          <dl className="mt-3 space-y-3 text-sm">
+            <div className="min-w-0">
               <dt className="text-bess-ink/60">Wallet</dt>
-              <dd className="break-all text-right text-bess-ink">{statement.walletAddress}</dd>
+              <dd className="mt-1 w-full min-w-0 overflow-x-auto whitespace-nowrap font-mono text-[0.8125rem] leading-normal text-bess-ink sm:text-sm">
+                {statement.walletAddress}
+              </dd>
             </div>
-            <div className="flex items-start justify-between gap-4">
-              <dt className="text-bess-ink/60">Token</dt>
+            <div className="flex items-baseline justify-between gap-4">
+              <dt className="shrink-0 text-bess-ink/60">Token</dt>
               <dd className="text-right text-bess-ink">{statement.tokenSymbol}</dd>
-            </div>
-            <div className="flex items-start justify-between gap-4">
-              <dt className="text-bess-ink/60">Account Label</dt>
-              <dd className="text-right text-bess-ink">{statement.accountLabel}</dd>
             </div>
           </dl>
         </div>

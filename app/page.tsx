@@ -4,43 +4,58 @@ import Image from "next/image";
 import { useState } from "react";
 import { StatementForm } from "@/components/statement-form";
 import { StatementPreview } from "@/components/statement-preview";
-import { getMockStatementData } from "@/lib/mock-statement-service";
 import { downloadStatementPdf } from "@/lib/pdf-generator";
 import type { StatementData, StatementInput } from "@/types/statement";
-
-const ACTIVITY_PERIOD = { startDate: "2025-02-01", endDate: "2025-02-28" };
-const NO_ACTIVITY_PERIOD = { startDate: "2022-06-01", endDate: "2022-06-30" };
 
 const DEFAULT_INPUT: StatementInput = {
   network: "Moonbeam",
   walletAddress: "0x54d91ff83f48837a113ef60db336e3b3cc05a6c1",
   tokenSymbol: "GLMR",
-  ...ACTIVITY_PERIOD,
+  startDate: "2025-02-01",
+  endDate: "2025-02-28",
 };
+
+function parseStatementApiPayload(
+  text: string,
+  response: Response,
+): { statement?: StatementData; error?: string } {
+  const trimmed = text.trim();
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    try {
+      return JSON.parse(trimmed) as { statement?: StatementData; error?: string };
+    } catch {
+      /* fall through to HTML / plain text handling */
+    }
+  }
+
+  const flat = text.replace(/\s+/g, " ").trim();
+  const looksTimeout =
+    /error occurred|function.*(duration|limit|timeout)|request timed out|502|503|504|bad gateway|gateway time-out/i.test(
+      text,
+    ) || [502, 503, 504].includes(response.status);
+
+  if (looksTimeout) {
+    throw new Error(
+      "The live statement request took too long or the server cut it off (HTML error instead of data). " +
+        "This often happens when the API hits the platform’s time limit. Try a shorter date range, " +
+        "or increase the serverless `maxDuration` for `/api/statement` in production.",
+    );
+  }
+
+  const snippet = flat.length > 180 ? `${flat.slice(0, 180)}…` : flat;
+  throw new Error(
+    `The server did not return JSON (${response.status}). ${snippet || "Empty response."}`,
+  );
+}
 
 export default function Home() {
   const [input, setInput] = useState<StatementInput>(DEFAULT_INPUT);
-  const [source, setSource] = useState<"mock" | "live">("mock");
-  const [scenario, setScenario] = useState<"activity" | "no-activity">("activity");
-  const [statement, setStatement] = useState<StatementData | null>(
-    getMockStatementData(DEFAULT_INPUT, "activity"),
-  );
+  const [statement, setStatement] = useState<StatementData | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  function handleScenarioChange(nextScenario: "activity" | "no-activity") {
-    const period = nextScenario === "activity" ? ACTIVITY_PERIOD : NO_ACTIVITY_PERIOD;
-    setScenario(nextScenario);
-    setInput((prev) => ({ ...prev, ...period }));
-  }
-
   async function handleGeneratePreview() {
     setErrorMessage(null);
-
-    if (source === "mock") {
-      setStatement(getMockStatementData(input, scenario));
-      return;
-    }
 
     setIsLoading(true);
     try {
@@ -49,7 +64,8 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(input),
       });
-      const payload = (await response.json()) as { statement?: StatementData; error?: string };
+      const raw = await response.text();
+      const payload = parseStatementApiPayload(raw, response);
 
       if (!response.ok || !payload.statement) {
         throw new Error(payload.error ?? "Failed to generate live statement.");
@@ -85,8 +101,7 @@ export default function Home() {
               </h1>
               <p className="mt-3 max-w-3xl text-sm text-bess-ink/85 md:text-base">
                 Generate professional account statement previews and export bank-style PDFs from
-                Subscan-style data. Use mock data for demos or the live API for a connected wallet
-                and period.
+                live Subscan data for your wallet and selected period.
               </p>
             </div>
           </div>
@@ -94,16 +109,7 @@ export default function Home() {
 
         <div className="grid gap-6 lg:grid-cols-[1fr_1.4fr]">
           <div className="space-y-4">
-            <StatementForm
-              value={input}
-              scenario={scenario}
-              source={source}
-              isLoading={isLoading}
-              onChange={setInput}
-              onSourceChange={setSource}
-              onScenarioChange={handleScenarioChange}
-              onGenerate={handleGeneratePreview}
-            />
+            <StatementForm value={input} isLoading={isLoading} onChange={setInput} onGenerate={handleGeneratePreview} />
 
             {errorMessage ? (
               <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">

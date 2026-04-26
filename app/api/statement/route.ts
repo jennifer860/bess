@@ -4,6 +4,7 @@ import type { StatementInput } from "@/types/statement";
 
 /** Subscan paged reward fetches can take a long time for large staking histories. */
 export const maxDuration = 300;
+export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
   try {
