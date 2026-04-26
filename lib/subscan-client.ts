@@ -40,6 +40,9 @@ type V2Transfer = {
   amount_v2?: string;
   amount?: string;
   success?: boolean;
+  /** Subscan often keeps 0x on `evm_*` while `from`/`to` are SS58 — match these for unified accounts. */
+  from_account_display?: { evm_address?: string; address?: string };
+  to_account_display?: { evm_address?: string; address?: string };
 };
 
 type V2Extrinsic = {
@@ -70,8 +73,6 @@ type SubscanResponse<T> = {
 
 /** On-chain block span for Subscan `block_range: "from-to"` (v2) and EVM `startblock`/`endblock`. */
 export type StatementBlockWindow = { from: number; to: number };
-
-type SubscanBlockHeadData = { block_num?: number };
 
 function parseSubscanErrorDetail(result: unknown): string {
   if (typeof result === "string" && result.trim().length > 0) {
@@ -217,9 +218,9 @@ async function callSubscanPost<T>(
 }
 
 /**
- * Map statement dates to a parachain/EVM block range via `/api/scan/block` (nearest to each timestamp).
- * Used to scope v2 and EVM list APIs so a chosen month (e.g. Feb 2025) is not missed when the API
- * ignores `order: desc` or the account has more history than page caps.
+ * Map statement dates to on-chain block bounds. Prefer Etherscan-compatible `getblocknobytime` so
+ * `startblock`/`endblock` and v2 `block_range` match Moonbeam’s EVM/substrate height. Fall back to
+ * `/api/scan/block` (seconds, then ms) if needed.
  */
 export async function resolveStatementBlockWindow(
   input: StatementInput,
@@ -228,30 +229,61 @@ export async function resolveStatementBlockWindow(
   const startT = Math.floor(new Date(`${input.startDate}T00:00:00Z`).getTime() / 1000);
   const endT = Math.floor(new Date(`${input.endDate}T23:59:59Z`).getTime() / 1000);
   const [a, b] = await Promise.all([
-    fetchBlockNumNearestToTimestamp(input.network, apiKey, startT),
-    fetchBlockNumNearestToTimestamp(input.network, apiKey, endT),
+    blockNumberAtUnix(input.network, apiKey, startT),
+    blockNumberAtUnix(input.network, apiKey, endT),
   ]);
   if (a == null || b == null) return null;
   return { from: Math.min(a, b), to: Math.max(a, b) };
 }
 
-async function fetchBlockNumNearestToTimestamp(
-  network: string,
-  apiKey: string,
-  unixSeconds: number,
-): Promise<number | null> {
-  try {
-    const data = await callSubscanPost<SubscanBlockHeadData | null>(network, apiKey, "/api/scan/block", {
-      block_timestamp: unixSeconds,
-      only_head: true,
-    });
-    if (!data || typeof data !== "object" || data.block_num == null) {
-      return null;
-    }
-    return Number(data.block_num);
-  } catch {
-    return null;
+function parseBlockNumberFromApiValue(value: unknown): number | null {
+  if (value == null || value === "") return null;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  const s = String(value).trim();
+  const n = /^0x[0-9a-fA-F]+$/.test(s) ? Number.parseInt(s, 16) : Number(s);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+function pickBlockNumFromScanBlockPayload(data: Record<string, unknown> | null): number | null {
+  if (!data) return null;
+  const direct = parseBlockNumberFromApiValue(data.block_num ?? data.number);
+  if (direct != null) return direct;
+  const inner = data.block;
+  if (inner && typeof inner === "object") {
+    const o = inner as Record<string, unknown>;
+    return parseBlockNumberFromApiValue(o.block_num ?? o.number);
   }
+  return null;
+}
+
+/** Etherscan-like `getblocknobytime` (Subscan supports on Moonbeam), then `/api/scan/block`. */
+async function blockNumberAtUnix(network: string, apiKey: string, unixSeconds: number): Promise<number | null> {
+  try {
+    const raw = await callEtherscanLike<string>(network, apiKey, {
+      module: "block",
+      action: "getblocknobytime",
+      timestamp: String(unixSeconds),
+      closest: "before",
+    });
+    const n = parseBlockNumberFromApiValue(raw);
+    if (n != null) return n;
+  } catch {
+    /* try scan/block */
+  }
+
+  for (const ts of [unixSeconds, unixSeconds * 1000]) {
+    try {
+      const data = (await callSubscanPost<Record<string, unknown> | null>(network, apiKey, "/api/scan/block", {
+        block_timestamp: ts,
+        only_head: true,
+      })) as Record<string, unknown> | null;
+      const n = pickBlockNumFromScanBlockPayload(data);
+      if (n != null) return n;
+    } catch {
+      /* next */
+    }
+  }
+  return null;
 }
 
 export async function fetchCurrentEvmBalanceWei(input: StatementInput, apiKey: string) {

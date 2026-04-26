@@ -89,11 +89,17 @@ export async function getLiveStatementFromSubscan(
     const date = toIsoDate(timestamp);
     const day = dayBuckets.get(date) ?? { incoming: 0, outgoing: 0, fees: 0, txCount: 0 };
     const amount = Number(transfer.amount_v2 ?? transfer.amount ?? "0");
-    const from = transfer.from?.toLowerCase?.() ?? "";
-    const to = transfer.to?.toLowerCase?.() ?? "";
+    const from = (transfer.from ?? "").toLowerCase();
+    const to = (transfer.to ?? "").toLowerCase();
+    const fromEvm = (transfer.from_account_display?.evm_address ?? "").toLowerCase();
+    const toEvm = (transfer.to_account_display?.evm_address ?? "").toLowerCase();
 
-    if (to === wallet && amount > 0) day.incoming += amount;
-    if (from === wallet && amount > 0) day.outgoing += amount;
+    const userIsRecipient = to === wallet || toEvm === wallet;
+    const userIsSender = from === wallet || fromEvm === wallet;
+    if (!userIsRecipient && !userIsSender) continue;
+
+    if (userIsRecipient && amount > 0) day.incoming += amount;
+    if (userIsSender && amount > 0) day.outgoing += amount;
     day.txCount += 1;
     dayBuckets.set(date, day);
   }
@@ -238,6 +244,11 @@ export async function getLiveStatementFromSubscan(
   for (const transfer of transfers) {
     const ts = toUnixSecondsForChain(transfer.block_timestamp);
     if (!isInRange(ts, startUnix, endUnix)) continue;
+    const from = (transfer.from ?? "").toLowerCase();
+    const to = (transfer.to ?? "").toLowerCase();
+    const fromEvm = (transfer.from_account_display?.evm_address ?? "").toLowerCase();
+    const toEvm = (transfer.to_account_display?.evm_address ?? "").toLowerCase();
+    if (from !== wallet && fromEvm !== wallet && to !== wallet && toEvm !== wallet) continue;
     const date = toIsoDate(ts);
     transferCountByDate.set(date, (transferCountByDate.get(date) ?? 0) + 1);
   }
@@ -274,7 +285,7 @@ export async function getLiveStatementFromSubscan(
     notes: [
       "Live data source: Subscan balance history + transfers + reward/slash + extrinsics + EVM activity.",
       blockWindow
-        ? `On-chain block window for list APIs: ${blockWindow.from}–${blockWindow.to} (from statement dates via /api/scan/block).`
+        ? `On-chain block window for list APIs: ${blockWindow.from}–${blockWindow.to} (from statement dates via Etherscan-like getblocknobytime, with /api/scan/block fallback).`
         : "Could not resolve a block range from dates; Substrate/EVM lists use unbounded paging (slower, may be incomplete for very active accounts).",
       "Beginning/ending balances are taken from Subscan balance history snapshots for the selected dates.",
       sortedHistory.length
