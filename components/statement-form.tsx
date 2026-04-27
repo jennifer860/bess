@@ -10,38 +10,23 @@ type StatementFormProps = {
   onGenerate: () => void;
 };
 
-const NETWORK_OPTIONS = ["Moonbeam", "Astar", "Polkadot", "Kusama"];
+const TODAY_UTC = new Date().toISOString().slice(0, 10);
 
 export function StatementForm({ value, isLoading, onChange, onGenerate }: StatementFormProps) {
   return (
     <section className="w-full min-w-0 rounded-2xl border border-bess-ink/10 bg-white p-6 shadow-sm">
       <h2 className="text-xl font-semibold text-bess-ink">Build Statement</h2>
-      <p className="mt-1 text-sm text-bess-ink/75">Fill the details below. Data is loaded from the live Subscan API.</p>
+      <p className="mt-1 text-sm text-bess-ink/75">Fill in the details below. Uses Subscan and Polkadot JS API data.</p>
 
       <div className="mt-6 grid gap-4 md:grid-cols-2">
         <label className="flex flex-col gap-1 text-sm text-bess-ink">
           Network
-          <select
-            className="rounded-lg border border-bess-ink/20 bg-white px-3 py-2 text-bess-ink"
-            value={value.network}
-            onChange={(event) => onChange({ ...value, network: event.target.value })}
-          >
-            {NETWORK_OPTIONS.map((option) => (
-              <option key={option} value={option}>
-                {option}
-              </option>
-            ))}
-          </select>
+          <div className="rounded-lg border border-bess-ink/20 bg-bess-mist/60 px-3 py-2 text-bess-ink">Moonbeam</div>
         </label>
 
         <label className="flex flex-col gap-1 text-sm text-bess-ink">
           Token Symbol
-          <input
-            className="rounded-lg border border-bess-ink/20 px-3 py-2 text-bess-ink"
-            value={value.tokenSymbol}
-            onChange={(event) => onChange({ ...value, tokenSymbol: event.target.value.toUpperCase() })}
-            placeholder="GLMR"
-          />
+          <div className="rounded-lg border border-bess-ink/20 bg-bess-mist/60 px-3 py-2 text-bess-ink">GLMR</div>
         </label>
 
         <label className="flex min-w-0 flex-col gap-1 text-sm text-bess-ink md:col-span-2">
@@ -61,7 +46,7 @@ export function StatementForm({ value, isLoading, onChange, onGenerate }: Statem
             type="date"
             className="rounded-lg border border-bess-ink/20 px-3 py-2 text-bess-ink"
             value={value.startDate}
-            min={value.network === "Moonbeam" ? MOONBEAM_EARLIEST_STATEMENT_DATE : undefined}
+            min={MOONBEAM_EARLIEST_STATEMENT_DATE}
             onChange={(event) => onChange({ ...value, startDate: event.target.value })}
           />
         </label>
@@ -72,7 +57,8 @@ export function StatementForm({ value, isLoading, onChange, onGenerate }: Statem
             type="date"
             className="rounded-lg border border-bess-ink/20 px-3 py-2 text-bess-ink"
             value={value.endDate}
-            min={value.network === "Moonbeam" ? MOONBEAM_EARLIEST_STATEMENT_DATE : undefined}
+            min={MOONBEAM_EARLIEST_STATEMENT_DATE}
+            max={TODAY_UTC}
             onChange={(event) => onChange({ ...value, endDate: event.target.value })}
           />
         </label>

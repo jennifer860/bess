@@ -13,6 +13,7 @@ function getFinalY(doc: jsPDF): number | undefined {
 
 const LOGO_W_PT = 92;
 const LOGO_H_PT = (LOGO_W_PT * 193) / 1024;
+const LOGO_Y_OFFSET_PT = -6;
 
 async function fetchLogoDataUrl(): Promise<string | null> {
   try {
@@ -35,7 +36,7 @@ async function fetchLogoDataUrl(): Promise<string | null> {
 function drawLogo(doc: jsPDF, logoDataUrl: string | null, margin: number) {
   if (!logoDataUrl) return;
   try {
-    doc.addImage(logoDataUrl, "PNG", margin, margin, LOGO_W_PT, LOGO_H_PT);
+    doc.addImage(logoDataUrl, "PNG", margin, margin + LOGO_Y_OFFSET_PT, LOGO_W_PT, LOGO_H_PT);
   } catch {
     /* optional */
   }
@@ -103,8 +104,8 @@ export async function downloadStatementPdf(statement: StatementData) {
       ["Beginning Balance", formatPdfAmount(statement.summary.beginningBalance)],
       ["Incoming Transfers", formatPdfAmount(statement.summary.incomingTransfers)],
       ["Reward Income", formatPdfAmount(statement.summary.rewardIncome)],
-      ["Outgoing Transfers", formatPdfAmount(statement.summary.outgoingTransfers)],
-      ["Fees", formatPdfAmount(statement.summary.fees)],
+      ["Outgoing Transfers", formatPdfAmount(-Math.abs(statement.summary.outgoingTransfers))],
+      ["Fees", formatPdfAmount(-Math.abs(statement.summary.fees))],
       ["Total Activity", formatPdfAmount(statement.summary.totalActivity)],
       ["Ending Balance", formatPdfAmount(statement.summary.endingBalance)],
     ],
@@ -153,7 +154,7 @@ export async function downloadStatementPdf(statement: StatementData) {
           i === 0 ? line.date : "",
           line.category,
           line.direction === "in" ? "Addition" : "Subtraction",
-          formatPdfAmount(line.amount),
+          formatPdfAmount(line.direction === "out" ? -Math.abs(line.amount) : line.amount),
           String(line.txCount),
         ]);
         rowIdx += 1;

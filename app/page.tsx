@@ -57,13 +57,15 @@ export default function Home() {
   async function handleGeneratePreview() {
     setErrorMessage(null);
     setStatement(null);
+    const requestInput: StatementInput = { ...input, network: "Moonbeam", tokenSymbol: "GLMR" };
+    setInput(requestInput);
 
     setIsLoading(true);
     try {
       const response = await fetch("/api/statement", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(input),
+        body: JSON.stringify(requestInput),
       });
       const raw = await response.text();
       const payload = parseStatementApiPayload(raw, response);
@@ -101,8 +103,8 @@ export default function Home() {
             </div>
             <div className="mt-1 w-full min-w-0 overflow-x-auto overflow-y-hidden py-0.5">
               <p className="w-max whitespace-nowrap text-xs leading-snug text-bess-ink/85 sm:text-sm">
-                Generate professional account statement previews and export bank-style PDFs from live
-                Subscan data for your wallet and selected period.
+                Generate professional Moonbeam (GLMR) account statement previews and export bank-style
+                PDFs for your GLMR wallet during a selected period.
               </p>
             </div>
           </div>

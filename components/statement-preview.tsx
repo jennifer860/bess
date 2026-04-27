@@ -28,13 +28,13 @@ export function StatementPreview({ statement, isLoading = false }: StatementPrev
   }
 
   const summaryRows = [
-    ["Beginning Balance", statement.summary.beginningBalance],
-    ["Incoming Transfers", statement.summary.incomingTransfers],
-    ["Reward Income", statement.summary.rewardIncome],
-    ["Outgoing Transfers", statement.summary.outgoingTransfers],
-    ["Fees", statement.summary.fees],
-    ["Total Activity", statement.summary.totalActivity],
-    ["Ending Balance", statement.summary.endingBalance],
+    { label: "Beginning Balance", value: statement.summary.beginningBalance, isSubtraction: false },
+    { label: "Incoming Transfers", value: statement.summary.incomingTransfers, isSubtraction: false },
+    { label: "Reward Income", value: statement.summary.rewardIncome, isSubtraction: false },
+    { label: "Outgoing Transfers", value: statement.summary.outgoingTransfers, isSubtraction: true },
+    { label: "Fees", value: statement.summary.fees, isSubtraction: true },
+    { label: "Total Activity", value: statement.summary.totalActivity, isSubtraction: false },
+    { label: "Ending Balance", value: statement.summary.endingBalance, isSubtraction: false },
   ];
 
   return (
@@ -89,11 +89,11 @@ export function StatementPreview({ statement, isLoading = false }: StatementPrev
             </tr>
           </thead>
           <tbody>
-            {summaryRows.map(([label, value]) => (
+            {summaryRows.map(({ label, value, isSubtraction }) => (
               <tr key={label} className="border-b border-bess-ink/10">
                 <td className="whitespace-nowrap px-3 py-2 text-bess-ink/80">{label}</td>
                 <td className="whitespace-nowrap px-3 py-2 text-right font-medium text-bess-ink tabular-nums">
-                  {formatAmount(Number(value), statement.tokenSymbol)}
+                  {formatAmount(isSubtraction ? -Math.abs(Number(value)) : Number(value), statement.tokenSymbol)}
                 </td>
               </tr>
             ))}
@@ -138,7 +138,10 @@ export function StatementPreview({ statement, isLoading = false }: StatementPrev
                       {line.direction === "in" ? "Addition" : "Subtraction"}
                     </td>
                     <td className="whitespace-nowrap px-3 py-2 text-right text-bess-ink tabular-nums">
-                      {formatAmount(line.amount, statement.tokenSymbol)}
+                      {formatAmount(
+                        line.direction === "out" ? -Math.abs(line.amount) : line.amount,
+                        statement.tokenSymbol,
+                      )}
                     </td>
                     <td className="whitespace-nowrap px-3 py-2 text-right text-bess-ink/80 tabular-nums">
                       {line.txCount}

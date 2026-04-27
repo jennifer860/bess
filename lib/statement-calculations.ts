@@ -18,7 +18,7 @@ export function buildStatementSummary(
   const additions = incomingTransfers + rewardIncome;
   const subtractions = outgoingTransfers + fees;
   const endingBalance = beginningBalance + additions - subtractions;
-  const totalActivity = additions + subtractions;
+  const totalActivity = additions - subtractions;
 
   return {
     beginningBalance,
