@@ -47,6 +47,7 @@ export function StatementForm({ value, isLoading, onChange, onGenerate }: Statem
             className="rounded-lg border border-bess-ink/20 px-3 py-2 text-bess-ink"
             value={value.startDate}
             min={MOONBEAM_EARLIEST_STATEMENT_DATE}
+            max={TODAY_UTC}
             onChange={(event) => onChange({ ...value, startDate: event.target.value })}
           />
         </label>

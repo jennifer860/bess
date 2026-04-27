@@ -34,9 +34,9 @@ export function buildStatementSummary(
 }
 
 export function formatAmount(value: number, tokenSymbol: string) {
-  const minDigits = 6;
-  const maxDigits = 6;
-  if (value < 0) {
+  const minDigits = 8;
+  const maxDigits = 8;
+  if (value < 0 || Object.is(value, -0)) {
     const abs = Math.abs(value).toLocaleString(undefined, {
       minimumFractionDigits: minDigits,
       maximumFractionDigits: maxDigits,
@@ -51,9 +51,9 @@ export function formatAmount(value: number, tokenSymbol: string) {
 
 /** PDF / table-only: same numeric formatting as `formatAmount` without the token suffix. */
 export function formatPdfAmount(value: number) {
-  const minDigits = 6;
-  const maxDigits = 6;
-  if (value < 0) {
+  const minDigits = 8;
+  const maxDigits = 8;
+  if (value < 0 || Object.is(value, -0)) {
     const abs = Math.abs(value).toLocaleString(undefined, {
       minimumFractionDigits: minDigits,
       maximumFractionDigits: maxDigits,
