@@ -119,14 +119,14 @@ export function StatementPreview({ statement, isLoading = false }: StatementPrev
           <p className="px-4 py-5 text-sm font-medium text-bess-ink/80">No Activity During Month</p>
         ) : (
           <div className="min-w-0 overflow-x-auto">
-            <table className="w-full min-w-[52rem] text-sm">
+            <table className="w-full min-w-[60rem] table-fixed text-sm">
               <thead className="bg-bess-mist text-bess-ink">
                 <tr>
-                  <th className="whitespace-nowrap px-3 py-2 text-left font-medium">Date</th>
-                  <th className="whitespace-nowrap px-3 py-2 text-left font-medium">Type</th>
-                  <th className="whitespace-nowrap px-3 py-2 text-left font-medium">Direction</th>
-                  <th className="whitespace-nowrap px-3 py-2 text-right font-medium">Amount</th>
-                  <th className="whitespace-nowrap px-3 py-2 text-right font-medium">Tx Count</th>
+                  <th className="w-[8.5rem] whitespace-nowrap px-3 py-2 text-left font-medium">Date</th>
+                  <th className="w-[10.5rem] whitespace-nowrap px-3 py-2 text-left font-medium">Type</th>
+                  <th className="w-[8.5rem] whitespace-nowrap px-3 py-2 text-left font-medium">Direction</th>
+                  <th className="w-[16rem] whitespace-nowrap px-3 py-2 text-right font-medium">Amount</th>
+                  <th className="w-[5rem] whitespace-nowrap px-3 py-2 text-right font-medium">Tx Count</th>
                 </tr>
               </thead>
               <tbody>
